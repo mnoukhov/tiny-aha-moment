@@ -1,12 +1,6 @@
 import os
 from pathlib import Path
 
-SCRATCH = Path.home() / "scratch"
-
-os.environ["HF_HOME"] = str(SCRATCH / "hf_home")
-os.environ["CUDA_HOME"] = "/cvmfs/ai.mila.quebec/apps/arch/common/cuda/12.5.1" # Hardcoded for now
-# os.environ["HF_TOKEN"] = "..." # Optional. Only needed for Llama models
-
 import argparse
 import gc
 import re
@@ -30,8 +24,10 @@ from utils import (
     find_free_port,
     find_last_checkpoint,
     prepare_model_inputs,
-    load_model_into_vllm
+    load_model_into_vllm,
 )
+
+SCRATCH = Path.home() / "scratch"
 
 
 # Load and process dataset
@@ -449,7 +445,7 @@ def main():
     RUN_NAME = (
         f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}"
     )
-    EXP_DIR = SCRATCH / "deepseek_hackathon" / RUN_NAME
+    EXP_DIR = SCRATCH / "tiny-aha-moment" / RUN_NAME
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"Logs and Checkpoints will be saved to: {EXP_DIR}")
@@ -500,7 +496,9 @@ def main():
         torch_dtype=torch.bfloat16,
         device_map=0,
     )
-    policy_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    policy_model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": False}
+    )
 
     # Initialize DeepSpeed engines
     policy_model, *_ = deepspeed.initialize(
@@ -617,7 +615,7 @@ def main():
                 max_tokens=MAX_RESPONSE_TOKENS,
                 detokenize=False,
                 stop_token_ids=[EOS_TOKEN_ID],
-            )
+            ),
         )
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
         all_finish_reasons = [g.finish_reason for out in outputs for g in out.outputs]
@@ -762,7 +760,6 @@ def main():
             policy_model.save_checkpoint(
                 str(EXP_DIR / "checkpoints" / f"ckpt_{iteration:06d}" / "deepspeed")
             )
-
 
 
 if __name__ == "__main__":
