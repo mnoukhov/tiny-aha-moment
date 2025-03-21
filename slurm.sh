@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --gres=gpu:a100l:1
-#SBATCH --mem=80G
+#SBATCH --mem=48G
 #SBATCH -c 4
 #SBATCH --time=8:00:00
 #SBATCH -p main
