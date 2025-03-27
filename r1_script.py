@@ -31,6 +31,9 @@ from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 SCRATCH = Path.home() / "scratch"
 
+FORMAT_REWARD_WEIGHT = 0.1
+EQUATION_REWARD_WEIGHT = 0.9
+
 
 def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
@@ -172,7 +175,9 @@ def compute_reward(
         completion=completion, nums=nums, target=target
     )
 
-    reward = format_reward + equation_reward
+    reward = (
+        format_reward * FORMAT_REWARD_WEIGHT + equation_reward * EQUATION_REWARD_WEIGHT
+    )
 
     metrics = {
         "format_reward": format_reward,
