@@ -26,8 +26,16 @@ from utils import (
     prepare_model_inputs,
     load_model_into_vllm,
 )
+from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
 
 SCRATCH = Path.home() / "scratch"
+
+
+def disable_dropout_in_model(model: torch.nn.Module) -> None:
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0
 
 
 # Load and process dataset
@@ -372,6 +380,9 @@ def main():
     parser.add_argument(
         "--learning_rate", type=float, default=1e-6, help="Learning rate for training"
     )
+    parser.add_argument(
+        "--liger_kernel", action=argparse.BooleanOptionalAction, default=False
+    )
     args = parser.parse_args()
 
     # Needed to stop DeepSpeed from complaining
@@ -387,13 +398,12 @@ def main():
 
     # Model configuration
     MODEL_NAME = args.model_name
-    MODEL_CHAT_NAME = MODEL_NAME + "-Instruct"
 
     # RL parameters
     # Total number of training iterations
-    NUM_ITERATIONS = 1000
+    NUM_ITERATIONS = 500
     # Number of episodes to collect per iteration for training
-    EPISODES_PER_ITERATION = 64
+    EPISODES_PER_ITERATION = 128
     # Number of responses to generate for each input prompt
     GENERATIONS_PER_SAMPLE = 4
     # Controls how much the policy can deviate from the reference model
@@ -457,11 +467,11 @@ def main():
     SYSTEM_MESSAGE = "You are a helpful assistant. You first thinks about the reasoning process in the mind and then provides the user with the answer."
     PROMPT_TEMPLATE = "Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final equation and answer in <answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_CHAT_NAME)
-    EOS_TOKEN_ID = AutoTokenizer.from_pretrained(MODEL_NAME).eos_token_id
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    EOS_TOKEN_ID = tokenizer.eos_token_id
     EOS_TOKEN = tokenizer.convert_ids_to_tokens(EOS_TOKEN_ID)
 
-    dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
+    dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train[:1000]")
     dataset = dataset.map(
         preprocess_example,
         num_proc=6,
@@ -484,13 +494,17 @@ def main():
     # Initialize Models
     ############################################
 
-    policy_model = AutoModelForCausalLM.from_pretrained(
+    MODEL_CLS = (
+        AutoLigerKernelForCausalLM if args.liger_kernel else AutoModelForCausalLM
+    )
+
+    policy_model = MODEL_CLS.from_pretrained(
         MODEL_NAME,
         attn_implementation="flash_attention_2",
         torch_dtype=torch.bfloat16,
         device_map=0,
     )
-    reference_model = AutoModelForCausalLM.from_pretrained(
+    reference_model = MODEL_CLS.from_pretrained(
         MODEL_NAME,
         attn_implementation="flash_attention_2",
         torch_dtype=torch.bfloat16,
@@ -499,6 +513,9 @@ def main():
     policy_model.gradient_checkpointing_enable(
         gradient_checkpointing_kwargs={"use_reentrant": False}
     )
+
+    disable_dropout_in_model(policy_model)
+    disable_dropout_in_model(reference_model)
 
     # Initialize DeepSpeed engines
     policy_model, *_ = deepspeed.initialize(
@@ -531,7 +548,6 @@ def main():
 
     # Wandb for logging
     wandb.init(
-        project="r1-aha-moment",
         name=RUN_NAME,
         config={
             "model_name": MODEL_NAME,
@@ -565,7 +581,7 @@ def main():
         #########################################################
 
         eval_stats = None
-        if iteration % 25 == 0:
+        if iteration % 25 == 0 and iteration > 0:
             print("Evaluating on eval set...")
             eval_episodes, eval_stats = evaluate_on_test_set(
                 inference_engine=inference_engine,
