@@ -607,8 +607,9 @@ Assistant: Let me solve this step by step.
                     temperature=0.3,
                     max_tokens=1024,
                     n=1,
-                    detokenize=False,
+                    detokenize=True,
                     stop=["User:", EOS_TOKEN, "</answer>", "Assistant:"],
+                    include_stop_str_in_output=True,
                 ),
                 reward_func=lambda completion, sample: compute_reward(
                     completion, sample, EOS_TOKEN
@@ -644,8 +645,9 @@ Assistant: Let me solve this step by step.
                 top_p=TOP_P,
                 top_k=TOP_K,
                 max_tokens=MAX_RESPONSE_TOKENS,
-                detokenize=False,
+                detokenize=True,
                 stop=["User:", EOS_TOKEN, "</answer>", "Assistant:"],
+                include_stop_str_in_output=True,
             ),
         )
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
