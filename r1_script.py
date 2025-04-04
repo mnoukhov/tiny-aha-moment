@@ -6,6 +6,7 @@ import gc
 import re
 import time
 from typing import Any, Dict, List, Tuple, Union
+import datetime
 
 import deepspeed
 import numpy as np
@@ -51,20 +52,22 @@ def preprocess_example(
     numbers: List[int] = example["nums"]
     target: int = example["target"]
 
-    prefix = [
-        {"role": "system", "content": SYSTEM_MESSAGE},
-        {
-            "role": "user",
-            "content": PROMPT_TEMPLATE.format(numbers=numbers, target=target),
-        },
-        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
-    ]
-    input_ids = tokenizer.apply_chat_template(
-        prefix, tokenize=True, continue_final_message=True
-    )
-    prompt = tokenizer.decode(
-        input_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-    )
+    # prefix = [
+    #     {"role": "system", "content": SYSTEM_MESSAGE},
+    #     {
+    #         "role": "user",
+    #         "content": PROMPT_TEMPLATE.format(numbers=numbers, target=target),
+    #     },
+    #     {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
+    # ]
+    # input_ids = tokenizer.apply_chat_template(
+    #     prefix, tokenize=True, continue_final_message=True
+    # )
+    # prompt = tokenizer.decode(
+    #     input_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+    # )
+    prompt = PROMPT_TEMPLATE.format(numbers=numbers, target=target)
+    input_ids = tokenizer.encode(prompt, add_special_tokens=False)
     return {"prompt": prompt, "input_ids": input_ids}
 
 
@@ -388,6 +391,7 @@ def main():
     parser.add_argument(
         "--liger_kernel", action=argparse.BooleanOptionalAction, default=False
     )
+    parser.add_argument("--vllm_gpu_memory_utilization", type=float, default=0.2)
     args = parser.parse_args()
 
     # Needed to stop DeepSpeed from complaining
@@ -439,13 +443,14 @@ def main():
         "gradient_accumulation_steps": EPISODES_PER_ITERATION // PER_DEVICE_BATCH_SIZE,
         "gradient_clipping": 1.0,
         "optimizer": {
-            "type": "AdamW",
+            "type": "Adam",
             "params": {
                 "lr": args.learning_rate,
                 "betas": (0.9, 0.999),
                 "eps": 1e-8,
                 "weight_decay": 0.0,
                 "torch_adam": True,
+                "fused": True,
             },
         },
     }
@@ -457,9 +462,9 @@ def main():
     }
 
     model_name_short = MODEL_NAME.split("/")[-1]
-    RUN_NAME = (
-        f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}"
-    )
+
+    current_time = datetime.datetime.now().strftime("%d-%m_%H-%M")
+    RUN_NAME = f"{model_name_short}_{current_time}"
     EXP_DIR = SCRATCH / "tiny-aha-moment" / RUN_NAME
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -469,14 +474,19 @@ def main():
     # Prompts and Dataset
     ############################################
 
-    SYSTEM_MESSAGE = "You are a helpful assistant. You first thinks about the reasoning process in the mind and then provides the user with the answer."
-    PROMPT_TEMPLATE = "Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final equation and answer in <answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
+    # SYSTEM_MESSAGE = "You are a helpful assistant. You first thinks about the reasoning process in the mind and then provides the user with the answer."
+    # PROMPT_TEMPLATE = "Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final equation and answer in <answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
+    SYSTEM_MESSAGE = None
+    PROMPT_TEMPLATE = """A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer.
+User: Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final answer in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>.
+Assistant: Let me solve this step by step.
+<think>"""
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     EOS_TOKEN_ID = tokenizer.eos_token_id
     EOS_TOKEN = tokenizer.convert_ids_to_tokens(EOS_TOKEN_ID)
 
-    dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train[:1000]")
+    dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     dataset = dataset.map(
         preprocess_example,
         num_proc=6,
@@ -542,7 +552,7 @@ def main():
     inference_engine = LLM(
         model=MODEL_NAME,
         skip_tokenizer_init=False,
-        gpu_memory_utilization=0.2,
+        gpu_memory_utilization=args.vllm_gpu_memory_utilization,
         enable_prefix_caching=True,
         swap_space=1,
         scheduling_policy="fcfs",
@@ -598,7 +608,7 @@ def main():
                     max_tokens=1024,
                     n=1,
                     detokenize=False,
-                    stop_token_ids=[EOS_TOKEN_ID],
+                    stop=["User:", EOS_TOKEN, "</answer>", "Assistant:"],
                 ),
                 reward_func=lambda completion, sample: compute_reward(
                     completion, sample, EOS_TOKEN
@@ -635,7 +645,7 @@ def main():
                 top_k=TOP_K,
                 max_tokens=MAX_RESPONSE_TOKENS,
                 detokenize=False,
-                stop_token_ids=[EOS_TOKEN_ID],
+                stop=["User:", EOS_TOKEN, "</answer>", "Assistant:"],
             ),
         )
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
