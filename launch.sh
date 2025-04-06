@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --gres=gpu:a100l:1
-#SBATCH --mem=48G
+#SBATCH --mem=24G
 #SBATCH -c 4
 #SBATCH --time=8:00:00
 #SBATCH -p main
@@ -11,4 +11,4 @@ export WANDB_PROJECT=r1-aha-moment
 export WANDB_ENTITY=mila-language-drift
 export HF_HOME=/network/scratch/n/noukhovm/huggingface
 
-uv run r1_script.py --liger_kernel $@
+uv run nano_r1_script.py --liger_kernel $@
