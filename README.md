@@ -1,76 +1,70 @@
-# Recreating R1's Aha Moment
-Inspired by [TinyZero](https://github.com/Jiayi-Pan/TinyZero), but designed to be 10X simpler, cleaner, and faster.
+# nanoAhaMoment: Single File "RL for LLM" Library
+> Amirhossein Kazemnejad*, Milad Aghajohari*, Alessandro Sordoni, Aaron Courville, Siva Reddy
+
+Implementation of DeepSeek R1-zero style training with:
+
+- Single 80G GPU
+- No RL Library 
+- 3B Base Model 
+- Full Parameter Tuning 
+- Efficient (less than 10h)
+
+Inspired by [TinyZero](https://github.com/Jiayi-Pan/TinyZero) and [Mini-R1](https://www.philschmid.de/mini-deepseek-r1), but designed to be much **simpler**, **cleaner**, and **faster**, with every line of code visible and understandable.
+
+## Karpathy-style Detailed Lecture on YouTube
+
+- [nanoAhaMoment: RL for LLM from Scratch with 1 GPU - Part 1](https://youtu.be/ZMO5tv30ri8)
+- [nanoAhaMoment: RL for LLM from Scratch with 1 GPU - Part 2](https://youtu.be/dxhCyhc_bcQ)
+
+## File Descriptions
+- `nano_r1.ipynb` is the interactive single file jupyter notebook with tutorial.
+- `nano_r1_script.py` is also just the `nano_r1.ipynb` but for convenience of running with python.
+- `notebooks/checkpoint_playground.ipynb` is a notebook for comparing different model checkpoints (including our trained model) and playing with them.
+- [🤗 McGill-NLP/nano-aha-moment-3b](https://huggingface.co/McGill-NLP/nano-aha-moment-3b): The HF model trained using the above script (~60\% Accuracy on CountDown Task)
 
 ## Setup Instructions
 
 1. **Clone the repository**  
    ```bash
-   git clone git@github.com:McGill-NLP/tiny-aha-moment.git
+   git clone https://github.com/McGill-NLP/nano-aha-moment.git
    ```
 
-2. **Install dependencies** 
-
-    **option 1: with pip**
-
-    First, load the necessay cuda tools:
-    ```bash
-    module load cudatoolkit/12.5
-    ```  
-    Next, install torch:  
-    ```bash
-    pip install torch==2.5
-    ```  
-    Next, follow the installation guide on the [vllm website](https://docs.vllm.ai/en/stable/getting_started/installation/gpu/index.html) for installing vllm. 
-    ```bash
-    pip install vllm
-    ```  
-    Next,
-    ```bash
-    pip install datasets deepspeed jupyter ipykernel ipywidgets wandb
-    ``` 
-    Next, install flash attention,
-    ```bash
-    pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-    ``` 
-    You should be set.
-
-    **option 2: with uv**
-
-    If necessary, install `uv`, [see their website](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer)
-
-    First, load the necessay cuda tools:
-    ```bash
-    module load cudatoolkit/12.4
-    ```
-
-    Install the environment in `.venv`
-    ```bash
-    uv sync
-    ```
-
-    Install flash-attention
-    ```bash
-    uv sync --extra compile
-    ```  
-
-    You can run with either `uv run r1_script.py` or activate the env with `source .venv/bin/activate` and run with `python r1_script.py`
-    
-    
-
-3. **Start an interactive job on the cluster**  
-   Request resources using:  
+2. **Install dependencies**  
+   First, make sure cuda 12.4 is installed.
+   
+   Install PyTorch:
    ```bash
-   salloc --partition=main --gres=gpu:a100l:1 -c 6 --mem=64G -t 12:00:00
-   ```  
-   Then, connect via VS Code or Cursor.
+   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+   ```
+   
+   Install the rest of the dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-4. **Run the training script**  
-   Open `r1_gold.ipynb`, set `CUDA_HOME` and `HF_HOME` as needed, and start training.
+   **Alternative Installation with uv (Optional)**  
+   ```bash
+   uv sync
+   uv sync --extra compile  # Install flash-attention
+   ```
 
-5. **Install VS Code extensions**  
-   Make sure to install the **Jupyter** and **Python** extensions in VS Code for a smoother experience.
+3. **Run the training script**  
+   Open `nano_r1.ipynb` or `nano_r1_script.py` and start training.
 
-## File Descriptions
-- `r1_gold.ipynb` is the ground truth implementation.
-- `r1_todo.ipynb` misses some components and you need to fill those without looking at the `r1_gold.ipynb`.
-- `r1_script.py` is also just the `r1_gold` but for convenience of running with python.
+   > If using uv, you can run with either `uv run nano_r1_script.py` or activate the env with `source .venv/bin/activate` and run with `python nano_r1_script.py`
+
+## Todos
+- [ ] Full evaluation suite
+
+## Citation
+If you use this codebase in your research, please cite us using:
+
+```bibtex
+@misc{Kazemnejad2025:NanoAhaMoment,
+  author       = {Amirhossein Kazemnejad and Milad Aghajohari and Alessandro Sordoni and Aaron Courville and Siva Reddy},
+  title        = {Nano Aha! Moment: Single File "RL for LLM" Library},
+  year         = {2025},
+  howpublished = {\url{https://github.com/McGill-NLP/nano-aha-moment}},
+  note         = {GitHub repository}
+}
+```

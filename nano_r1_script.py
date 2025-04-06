@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-
 import argparse
 import gc
 import re
@@ -52,22 +51,20 @@ def preprocess_example(
     numbers: List[int] = example["nums"]
     target: int = example["target"]
 
-    # prefix = [
-    #     {"role": "system", "content": SYSTEM_MESSAGE},
-    #     {
-    #         "role": "user",
-    #         "content": PROMPT_TEMPLATE.format(numbers=numbers, target=target),
-    #     },
-    #     {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
-    # ]
-    # input_ids = tokenizer.apply_chat_template(
-    #     prefix, tokenize=True, continue_final_message=True
-    # )
-    # prompt = tokenizer.decode(
-    #     input_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-    # )
-    prompt = PROMPT_TEMPLATE.format(numbers=numbers, target=target)
-    input_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    prefix = [
+        {"role": "system", "content": SYSTEM_MESSAGE},
+        {
+            "role": "user",
+            "content": PROMPT_TEMPLATE.format(numbers=numbers, target=target),
+        },
+        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
+    ]
+    input_ids = tokenizer.apply_chat_template(
+        prefix, tokenize=True, continue_final_message=True
+    )
+    prompt = tokenizer.decode(
+        input_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+    )
     return {"prompt": prompt, "input_ids": input_ids}
 
 
@@ -462,7 +459,6 @@ def main():
     }
 
     model_name_short = MODEL_NAME.split("/")[-1]
-
     current_time = datetime.datetime.now().strftime("%d-%m_%H-%M")
     RUN_NAME = f"{model_name_short}_{current_time}"
     EXP_DIR = SCRATCH / "tiny-aha-moment" / RUN_NAME
@@ -474,13 +470,16 @@ def main():
     # Prompts and Dataset
     ############################################
 
-    # SYSTEM_MESSAGE = "You are a helpful assistant. You first thinks about the reasoning process in the mind and then provides the user with the answer."
-    # PROMPT_TEMPLATE = "Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final equation and answer in <answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
-    SYSTEM_MESSAGE = None
-    PROMPT_TEMPLATE = """A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer.
-User: Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final answer in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>.
-Assistant: Let me solve this step by step.
-<think>"""
+    SYSTEM_MESSAGE = (
+        "You are a helpful assistant. You first think about the reasoning process in the mind "
+        "and then provide the user with the answer."
+    )
+    PROMPT_TEMPLATE = (
+        "Using the numbers {numbers}, create an equation that equals {target}. "
+        "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
+        "Show your work in <think> </think> tags. And return the final equation and answer in "
+        "<answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     EOS_TOKEN_ID = tokenizer.eos_token_id
@@ -583,7 +582,7 @@ Assistant: Let me solve this step by step.
         out = policy_model.load_checkpoint(ckpt_path / "deepspeed")
         if out is None:
             raise RuntimeError(f"Failed to load checkpoint {ckpt_path}")
-        begin_iter = ckpt_iter
+        begin_iter = ckpt_iter + 1
         load_model_into_vllm(policy_model, inference_engine)
 
     for iteration in trange(begin_iter, NUM_ITERATIONS):
@@ -645,11 +644,13 @@ Assistant: Let me solve this step by step.
                 top_p=TOP_P,
                 top_k=TOP_K,
                 max_tokens=MAX_RESPONSE_TOKENS,
-                detokenize=True,
-                stop=["User:", EOS_TOKEN, "</answer>", "Assistant:"],
-                include_stop_str_in_output=True,
+                detokenize=False,
+                stop_token_ids=[EOS_TOKEN_ID],
             ),
         )
+        # detokenize=True,
+        # stop=["User:", EOS_TOKEN, "</answer>", "Assistant:"],
+        # include_stop_str_in_output=True,
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
         all_finish_reasons = [g.finish_reason for out in outputs for g in out.outputs]
         inference_engine.sleep(1)
