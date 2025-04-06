@@ -11,4 +11,4 @@ export WANDB_PROJECT=r1-aha-moment
 export WANDB_ENTITY=mila-language-drift
 export HF_HOME=/network/scratch/n/noukhovm/huggingface
 
-uv run r1_script.py --liger_kernel
+uv run r1_script.py --liger_kernel $@

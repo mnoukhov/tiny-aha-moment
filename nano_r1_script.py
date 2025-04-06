@@ -391,6 +391,12 @@ def main():
         "--liger_kernel", action=argparse.BooleanOptionalAction, default=False
     )
     parser.add_argument("--vllm_gpu_memory_utilization", type=float, default=0.2)
+    parser.add_argument(
+        "--offload_ref", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--vllm_sleep_mode", action=argparse.BooleanOptionalAction, default=True
+    )
     args = parser.parse_args()
 
     # Needed to stop DeepSpeed from complaining
@@ -551,7 +557,8 @@ def main():
         config=ref_deepspeed_config,
     )
 
-    reference_model.module.cpu()
+    if args.offload_ref:
+        reference_model.module.cpu()
 
     ############################################
     # Initialize vLLM (Inference) engine
@@ -566,7 +573,7 @@ def main():
         scheduling_policy="fcfs",
         dtype=torch.bfloat16,
         max_model_len=2048,
-        enable_sleep_mode=True,
+        enable_sleep_mode=args.vllm_sleep_mode,
     )
 
     # Wandb for logging
@@ -662,7 +669,8 @@ def main():
         # include_stop_str_in_output=True,
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
         all_finish_reasons = [g.finish_reason for out in outputs for g in out.outputs]
-        inference_engine.sleep(1)
+        if args.vllm_sleep_mode:
+            inference_engine.sleep(1)
 
         print(f"Generated {len(all_generations)} responses")
         gc.collect()
@@ -708,7 +716,8 @@ def main():
 
         # Calculate losses and update model
         policy_model.train()
-        reference_model.module.cuda()
+        if args.offload_ref:
+            reference_model.module.cuda()
         reference_model.eval()
 
         total_response_len = (model_inputs["labels"] != -100).sum().item()
@@ -751,7 +760,7 @@ def main():
 
             # Free memory
             del loss, loss_metrics
-            if policy_model.is_gradient_accumulation_boundary():
+            if policy_model.is_gradient_accumulation_boundary() and args.offload_ref:
                 reference_model.module.cpu()
 
             policy_model.step()
@@ -766,7 +775,8 @@ def main():
         torch.cuda.empty_cache()
         time.sleep(1)
 
-        inference_engine.wake_up()
+        if args.vllm_sleep_mode:
+            inference_engine.wake_up()
         load_model_into_vllm(policy_model, inference_engine)
 
         #########################################################
