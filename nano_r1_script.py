@@ -51,20 +51,22 @@ def preprocess_example(
     numbers: List[int] = example["nums"]
     target: int = example["target"]
 
-    prefix = [
-        {"role": "system", "content": SYSTEM_MESSAGE},
-        {
-            "role": "user",
-            "content": PROMPT_TEMPLATE.format(numbers=numbers, target=target),
-        },
-        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
-    ]
-    input_ids = tokenizer.apply_chat_template(
-        prefix, tokenize=True, continue_final_message=True
-    )
-    prompt = tokenizer.decode(
-        input_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-    )
+    # prefix = [
+    #     {"role": "system", "content": SYSTEM_MESSAGE},
+    #     {
+    #         "role": "user",
+    #         "content": PROMPT_TEMPLATE.format(numbers=numbers, target=target),
+    #     },
+    #     {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
+    # ]
+    # input_ids = tokenizer.apply_chat_template(
+    #     prefix, tokenize=True, continue_final_message=True
+    # )
+    # prompt = tokenizer.decode(
+    #     input_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+    # )
+    prompt = PROMPT_TEMPLATE.format(numbers=numbers, target=target)
+    input_ids = tokenizer.encode(prompt, add_special_tokens=False)
     return {"prompt": prompt, "input_ids": input_ids}
 
 
@@ -470,16 +472,23 @@ def main():
     # Prompts and Dataset
     ############################################
 
-    SYSTEM_MESSAGE = (
-        "You are a helpful assistant. You first think about the reasoning process in the mind "
-        "and then provide the user with the answer."
-    )
+    # SYSTEM_MESSAGE = (
+    #     "You are a helpful assistant. You first think about the reasoning process in the mind "
+    #     "and then provide the user with the answer."
+    # )
+    # PROMPT_TEMPLATE = (
+    #     "Using the numbers {numbers}, create an equation that equals {target}. "
+    #     "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
+    #     "Show your work in <think> </think> tags. And return the final equation and answer in "
+    #     "<answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
+    # )
     PROMPT_TEMPLATE = (
-        "Using the numbers {numbers}, create an equation that equals {target}. "
-        "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
-        "Show your work in <think> </think> tags. And return the final equation and answer in "
-        "<answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
+        "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer.\n"
+        "User: Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final answer in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>.\n"
+        "Assistant: Let me solve this step by step.\n"
+        "<think>"
     )
+    SYSTEM_MESSAGE = ""
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     EOS_TOKEN_ID = tokenizer.eos_token_id
