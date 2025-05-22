@@ -287,7 +287,6 @@ def create_vineppo_training_episodes(
     GENERATIONS_PER_SAMPLE: int,
     MAX_RESPONSE_TOKENS: int,
     VINEPPO_K: int,
-    VINEPPO_REFINEMENT_ITERATIONS: int,
     TEMPERATURE: float,
     TOP_P: float,
     TOP_K: int,
@@ -403,36 +402,7 @@ def create_vineppo_training_episodes(
             tokens_advantages.extend([advantage] * length)
         return tokens_advantages
     
-    def propose_new_states_for_value_estimation(states, value_estimates, response_reward, length_of_response):
-        new_states = []
-        assert sorted(states) == states
-        assert len(value_estimates) == len(states)
-        
-        if len(states) == 0:
-            return [0]
-        
-        idx = 0
-        step_start = states[0]
-        
-        while idx < len(states):
-            if idx == len(states) - 1:
-                step_end = length_of_response
-                advantage_estimate = response_reward - value_estimates[idx]
-            else:
-                step_end = states[idx+1]
-                advantage_estimate = value_estimates[idx] - value_estimates[idx-1]
-            
-            if advantage_estimate != 0:
-                middle_step = step_start + (step_end - step_start) // 2
-                if middle_step != step_start:
-                    new_states.append(middle_step)
-            
-            step_start = step_end
-            idx += 1
-            
-        
-        return new_states
-
+    
     assert len(all_generations) == len(all_finish_reasons)
     assert len(all_generations) == len(samples) * GENERATIONS_PER_SAMPLE
 
@@ -491,11 +461,7 @@ def create_vineppo_training_episodes(
                  }
         ds.append(datum)        
     
-    for i in range(VINEPPO_REFINEMENT_ITERATIONS):
-        print(f"vineppo credit refinement {i}th iteration")
-        ds = estimate_values_by_mc_rollouts(ds)
-        for i, datum in enumerate(ds):
-            datum['new_states'] = propose_new_states_for_value_estimation(datum['states'], datum['value_estimates'], datum['reward'], len(datum['response_token_ids']))
+    ds = estimate_values_by_mc_rollouts(ds)
      
     all_advantages = []       
     for i, datum in enumerate(ds):
@@ -594,7 +560,6 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Debug mode")
     parser.add_argument("--algorithm", type=str, choices=['grpo', 'vineppo'], default='vineppo', help="Algorithm to use")
     parser.add_argument("--vineppo_k", type=int, default=1, help="Number of MC samples to take for each response")
-    parser.add_argument("--vineppo_refinement_iterations", type=int, default=1, help="Number of refinement iterations to run")
     parser.add_argument("--run_id", type=str, default=None, help="Run ID")
     args = parser.parse_args()
 
@@ -647,7 +612,6 @@ def main():
     TOP_K = -1  # no top k
     # Number of MC samples to take for each response
     VINEPPO_K = args.vineppo_k
-    VINEPPO_REFINEMENT_ITERATIONS = args.vineppo_refinement_iterations
     # DeepSpeed configuration
     deepspeed_config = {
         "bf16": {"enabled": True},
@@ -903,7 +867,6 @@ def main():
                 GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
                 MAX_RESPONSE_TOKENS=MAX_RESPONSE_TOKENS,
                 VINEPPO_K=VINEPPO_K,
-                VINEPPO_REFINEMENT_ITERATIONS=VINEPPO_REFINEMENT_ITERATIONS,
                 TEMPERATURE=TEMPERATURE,
                 TOP_P=TOP_P,
                 TOP_K=TOP_K,
