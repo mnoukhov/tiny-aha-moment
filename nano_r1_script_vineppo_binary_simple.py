@@ -287,18 +287,19 @@ def create_vineppo_training_episodes(
     GENERATIONS_PER_SAMPLE: int,
     MAX_RESPONSE_TOKENS: int,
     VINEPPO_K: int,
+    VINEPPO_REFINEMENT_ITERATIONS: int,
     TEMPERATURE: float,
     TOP_P: float,
     TOP_K: int,
     logit_processor: Callable,
 ):
     
-    def mc_queries(ds):
+    def estimate_values_by_mc_rollouts(ds):
         def get_response_prefixes(response_token_ids, states_for_value_estimation):
             prefixes = []
             for state in states_for_value_estimation:  
                 prefixes.append(response_token_ids[:state])
-            return {'mc_response_prefixes_token_ids': prefixes}
+            return prefixes
         
         def get_prefix_queries(query_token_ids, response_prefixes_token_ids):
             prefix_queries_token_ids = []
@@ -306,7 +307,7 @@ def create_vineppo_training_episodes(
             for token_ids in response_prefixes_token_ids:
                 prefix_queries_token_ids.append(query_token_ids + token_ids)
                 max_tokens.append(MAX_RESPONSE_TOKENS - len(token_ids)) # this is how many response tokens are left.
-            return {'mc_queries_token_ids': prefix_queries_token_ids, 'mc_queries_max_tokens': max_tokens}
+            return prefix_queries_token_ids, max_tokens
         
         def get_value_estimates(sample, response_prefixes, mcs_token_ids):
             values_estimates = []
@@ -317,7 +318,7 @@ def create_vineppo_training_episodes(
                     score, _ = compute_reward(full_text, sample, EOS_TOKEN)
                     values.append(score)
                 values_estimates.append(sum(values) / len(values))
-            return {'mc_values_estimates': values_estimates}
+            return values_estimates
             
         def update_state_values(old_states, old_value_estimates, new_states, new_value_estimates): 
             values = {}
@@ -328,21 +329,28 @@ def create_vineppo_training_episodes(
                 values[state] = value_estimate
             sorted_states = sorted(values.keys())
             sorted_values = [values[state] for state in sorted_states]
-            return {'states': sorted_states, 'value_estimates': sorted_values}
+            return sorted_states, sorted_values
         
         def extract_token_ids(vllm_outputs):
             outputs = []
             for out in vllm_outputs:
-                outputs.append(out.token_ids)
+                outputs.append(list(out.token_ids))
             return outputs
         
-        ds = ds.map(lambda x: get_response_prefixes(x['response_token_ids'], x['new_states']), num_proc=4)
-        ds = ds.map(lambda x: get_prefix_queries(x['query_token_ids'], x['mc_response_prefixes_token_ids']), num_proc=4)
-        all_mc_queries = ds['mc_queries_token_ids']
+        for i, datum in enumerate(ds):
+            datum['mc_response_prefixes_token_ids'] = get_response_prefixes(datum['response_token_ids'], datum['new_states'])
+            datum['mc_queries_token_ids'], datum['mc_queries_max_tokens'] = get_prefix_queries(datum['query_token_ids'], datum['mc_response_prefixes_token_ids'])
+            
+        all_mc_queries = []
+        all_mc_queries_max_tokens = []
+        for i, datum in enumerate(ds):
+            all_mc_queries.append(datum['mc_queries_token_ids'])
+            all_mc_queries_max_tokens.append(datum['mc_queries_max_tokens'])
+            
         flatten_mc_queries = []
         flatten_mc_queries_max_tokens = []
         count_queries = []
-        for mc_queries, max_tokens in zip(all_mc_queries, ds['mc_queries_max_tokens']):
+        for mc_queries, max_tokens in zip(all_mc_queries, all_mc_queries_max_tokens):
             flatten_mc_queries.extend(mc_queries)
             flatten_mc_queries_max_tokens.extend(max_tokens)
             count_queries.append(len(mc_queries))
@@ -371,10 +379,19 @@ def create_vineppo_training_episodes(
             mcs_token_ids.append([extract_token_ids(out.outputs) for out in output_slice])
             start += count
             
-        ds = ds.add_column('mcs_token_ids', mcs_token_ids)
-        ds = ds.map(lambda x: get_value_estimates(x['sample'], x['mc_response_prefixes_token_ids'], x['mcs_token_ids']), num_proc=4)
-        ds = ds.map(lambda x: update_state_values(x['states'], x['value_estimates'], x['new_states'], x['mc_values_estimates']), num_proc=4)
-        ds = ds.remove_columns(['new_states', 'mcs_token_ids', 'mc_values_estimates', 'mc_response_prefixes_token_ids', 'mc_queries_token_ids', 'mc_queries_max_tokens'])
+        for i, datum in enumerate(ds):
+            mc_token_ids = mcs_token_ids[i]
+            mc_value_estimates = get_value_estimates(datum['sample'], datum['mc_response_prefixes_token_ids'], mc_token_ids)
+            datum['states'], datum['value_estimates'] = update_state_values(datum['states'], datum['value_estimates'], datum['new_states'], mc_value_estimates)
+            
+            
+        # remove unnecessary keys
+        for i, datum in enumerate(ds):
+            datum.pop('new_states')
+            datum.pop('mc_response_prefixes_token_ids')
+            datum.pop('mc_queries_token_ids')
+            datum.pop('mc_queries_max_tokens')
+            
         return ds
 
     def get_tokens_advantages(states: List[int], value_estimates: List[float]):
@@ -384,7 +401,7 @@ def create_vineppo_training_episodes(
             length = states[i+1] - states[i]
             advantage = value_estimates[i+1] - value_estimates[i]
             tokens_advantages.extend([advantage] * length)
-        return {'tokens_advantages': tokens_advantages}
+        return tokens_advantages
     
     def propose_new_states_for_value_estimation(states, value_estimates, response_reward, length_of_response):
         new_states = []
@@ -461,19 +478,34 @@ def create_vineppo_training_episodes(
             for k, v in rm.items():
                 stats.setdefault(f"reward_metrics/{k}", []).append(v)
     
-    ds = {'query_token_ids': all_query_token_ids, 'response_token_ids': all_responses_token_ids, 'sample': all_samples, 'reward': all_rewards})
-    ds = ds.map(lambda x: {'states': [len(x['response_token_ids'])], 'value_estimates': [x['reward']]}, num_proc=4) # the value of the last step is the reward of the response. 
-    ds = ds.map(lambda x: {'new_states': split_response(x['response_token_ids'])}, num_proc=4)
-    for j in range(5):
-        print(f'Vineppo refinement iteration: {j}')
-        ds = mc_queries(ds)
-        ds = ds.map(lambda x: {'new_states': propose_new_states_for_value_estimation(x['states'], x['value_estimates'], x['reward'], len(x['response_token_ids']))}, num_proc=4)
-    ds = ds.map(lambda x: get_tokens_advantages(x['states'], x['value_estimates']), num_proc=4)
+    
+    ds = []
+    for i in range(len(all_samples)):
+        datum = {'query_token_ids': all_query_token_ids[i],
+                 'response_token_ids': all_responses_token_ids[i], 
+                 'sample': all_samples[i], 
+                 'reward': all_rewards[i],
+                 'states': [len(all_responses_token_ids[i])],
+                 'value_estimates': [all_rewards[i]],
+                 'new_states': split_response(all_responses_token_ids[i])
+                 }
+        ds.append(datum)        
+    
+    for i in range(VINEPPO_REFINEMENT_ITERATIONS):
+        print(f"vineppo credit refinement {i}th iteration")
+        ds = estimate_values_by_mc_rollouts(ds)
+        for i, datum in enumerate(ds):
+            datum['new_states'] = propose_new_states_for_value_estimation(datum['states'], datum['value_estimates'], datum['reward'], len(datum['response_token_ids']))
+     
+    all_advantages = []       
+    for i, datum in enumerate(ds):
+        datum['tokens_advantages'] = get_tokens_advantages(datum['states'], datum['value_estimates'])
+        all_advantages.append(datum['tokens_advantages'])
     
     episodes = {
-        'all_query_token_ids': ds['query_token_ids'],
-        'all_response_token_ids': ds['response_token_ids'],
-        'all_advantages': ds['tokens_advantages'],
+        'all_query_token_ids': all_query_token_ids,
+        'all_response_token_ids': all_responses_token_ids,
+        'all_advantages': all_advantages,
     }
     
     return episodes, stats
@@ -553,13 +585,17 @@ def compute_pg_loss(
 
 def main():
     # Parse command line arguments
+    
     parser = argparse.ArgumentParser(description="Train R1 model with PPO")
     parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for PPO")
     parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-3B", help="Model name/path")
     parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
     parser.add_argument("--debug", action="store_true", help="Debug mode")
-    parser.add_argument("--vineppo_k", type=int, default=3, help="Number of MC samples to take for each response")
+    parser.add_argument("--algorithm", type=str, choices=['grpo', 'vineppo'], default='vineppo', help="Algorithm to use")
+    parser.add_argument("--vineppo_k", type=int, default=1, help="Number of MC samples to take for each response")
+    parser.add_argument("--vineppo_refinement_iterations", type=int, default=1, help="Number of refinement iterations to run")
+    parser.add_argument("--run_id", type=str, default=None, help="Run ID")
     args = parser.parse_args()
 
     # Needed to stop DeepSpeed from complaining
@@ -611,7 +647,7 @@ def main():
     TOP_K = -1  # no top k
     # Number of MC samples to take for each response
     VINEPPO_K = args.vineppo_k
-
+    VINEPPO_REFINEMENT_ITERATIONS = args.vineppo_refinement_iterations
     # DeepSpeed configuration
     deepspeed_config = {
         "bf16": {"enabled": True},
@@ -639,7 +675,10 @@ def main():
     }
 
     model_name_short = MODEL_NAME.split("/")[-1]
-    RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}_vine_debug_3"
+    if args.run_id is None:
+        RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}"
+    else:
+        RUN_NAME = args.run_id
     EXP_DIR = SCRATCH / "deepseek_hackathon" / RUN_NAME
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -842,22 +881,36 @@ def main():
         print(f"Time taken to generate {len(all_generations)} responses: {time.time() - gen_time} seconds")
 
         # Process responses and calculate rewards
-        episodes, episodes_stats = create_vineppo_training_episodes(
-            inference_engine=inference_engine,
-            samples=samples,
-            all_generations=all_generations,
-            all_finish_reasons=all_finish_reasons,
-            tokenizer=tokenizer,
-            EOS_TOKEN_ID=EOS_TOKEN_ID,
-            EOS_TOKEN=EOS_TOKEN,
-            GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
-            MAX_RESPONSE_TOKENS=MAX_RESPONSE_TOKENS,
-            VINEPPO_K=VINEPPO_K,
-            TEMPERATURE=TEMPERATURE,
-            TOP_P=TOP_P,
-            TOP_K=TOP_K,
-            logit_processor=logit_processor,
-        )
+        if args.algorithm == 'grpo':
+            episodes, episodes_stats = create_training_episodes(
+                samples=samples,
+                all_generations=all_generations,
+                all_finish_reasons=all_finish_reasons,
+                tokenizer=tokenizer,
+                EOS_TOKEN_ID=EOS_TOKEN_ID,
+                EOS_TOKEN=EOS_TOKEN,
+                GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
+            )
+        elif args.algorithm == 'vineppo':
+            episodes, episodes_stats = create_vineppo_training_episodes(
+                inference_engine=inference_engine,
+                samples=samples,
+                all_generations=all_generations,
+                all_finish_reasons=all_finish_reasons,
+                tokenizer=tokenizer,
+                EOS_TOKEN_ID=EOS_TOKEN_ID,
+                EOS_TOKEN=EOS_TOKEN,
+                GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
+                MAX_RESPONSE_TOKENS=MAX_RESPONSE_TOKENS,
+                VINEPPO_K=VINEPPO_K,
+                VINEPPO_REFINEMENT_ITERATIONS=VINEPPO_REFINEMENT_ITERATIONS,
+                TEMPERATURE=TEMPERATURE,
+                TOP_P=TOP_P,
+                TOP_K=TOP_K,
+                logit_processor=logit_processor,
+            )
+        else:
+            raise ValueError(f"Invalid algorithm: {args.algorithm}")
         
         inference_engine.sleep(1)
         gc.collect()
