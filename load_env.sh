@@ -1,0 +1,1 @@
+source /home/mila/a/aghajohm/repos/nano-aha-moment/env2/bin/activate

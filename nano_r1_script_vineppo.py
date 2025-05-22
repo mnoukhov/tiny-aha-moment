@@ -265,8 +265,6 @@ def create_training_episodes(
     return episodes, stats
 
 def split_response(response_token_ids):
-    # You should follow two rules: first boundary is always 0. last boundary is always the length of the response.
-    # Next, split however you want. We just chunk every 100 tokens as a simple heuristic.
     last_index = len(response_token_ids)
     step_boundaries = [0]
     cursor = 0
@@ -276,7 +274,6 @@ def split_response(response_token_ids):
             break
         step_boundaries.append(cursor)
     
-    step_boundaries.append(last_index)
     return step_boundaries
 
 def create_vineppo_training_episodes(
@@ -290,33 +287,70 @@ def create_vineppo_training_episodes(
     GENERATIONS_PER_SAMPLE: int,
     MAX_RESPONSE_TOKENS: int,
     VINEPPO_K: int,
+    VINEPPO_REFINEMENT_ITERATIONS: int,
     TEMPERATURE: float,
     TOP_P: float,
     TOP_K: int,
     logit_processor: Callable,
 ):
-    def get_response_prefixes(response_token_ids, step_boundaries):
-            prefixes = [[],]
-            for i in range(1, len(step_boundaries) - 1): # we never expand the last step. It is either an EOS or reached the max_tokens limit. If we do, we are essentially forcing the model to talk after eos.   
-                prefixes.append(response_token_ids[:step_boundaries[i]])
-            return {'response_prefixes_token_ids': prefixes}
+    
+    def estimate_values_by_mc_rollouts(ds):
+        def get_response_prefixes(response_token_ids, states_for_value_estimation):
+            prefixes = []
+            for state in states_for_value_estimation:  
+                prefixes.append(response_token_ids[:state])
+            return prefixes
         
-    def get_prefix_queries(query_token_ids, response_prefixes_token_ids):
-        prefix_queries_token_ids = []
-        max_tokens = []
-        for token_ids in response_prefixes_token_ids:
-            prefix_queries_token_ids.append(query_token_ids + token_ids)
-            max_tokens.append(MAX_RESPONSE_TOKENS - len(token_ids)) # this is how many response tokens are left.
-        return {'mc_queries_token_ids': prefix_queries_token_ids, 'mc_queries_max_tokens': max_tokens}
-
-    def mc_queries(ds):
-        ds = ds.map(lambda x: get_response_prefixes(x['response_token_ids'], x['step_boundaries']), num_proc=4)
-        ds = ds.map(lambda x: get_prefix_queries(x['query_token_ids'], x['response_prefixes_token_ids']), num_proc=4)
-        all_mc_queries = ds['mc_queries_token_ids']
+        def get_prefix_queries(query_token_ids, response_prefixes_token_ids):
+            prefix_queries_token_ids = []
+            max_tokens = []
+            for token_ids in response_prefixes_token_ids:
+                prefix_queries_token_ids.append(query_token_ids + token_ids)
+                max_tokens.append(MAX_RESPONSE_TOKENS - len(token_ids)) # this is how many response tokens are left.
+            return prefix_queries_token_ids, max_tokens
+        
+        def get_value_estimates(sample, response_prefixes, mcs_token_ids):
+            values_estimates = []
+            for prefix, mcs in zip(response_prefixes, mcs_token_ids):
+                values = []
+                for mc in mcs:
+                    full_text = tokenizer.decode(prefix + mc, skip_special_tokens=False)
+                    score, _ = compute_reward(full_text, sample, EOS_TOKEN)
+                    values.append(score)
+                values_estimates.append(sum(values) / len(values))
+            return values_estimates
+            
+        def update_state_values(old_states, old_value_estimates, new_states, new_value_estimates): 
+            values = {}
+            for state, value_estimate in zip(old_states, old_value_estimates):
+                values[state] = value_estimate
+            for state, value_estimate in zip(new_states, new_value_estimates):
+                assert state not in values
+                values[state] = value_estimate
+            sorted_states = sorted(values.keys())
+            sorted_values = [values[state] for state in sorted_states]
+            return sorted_states, sorted_values
+        
+        def extract_token_ids(vllm_outputs):
+            outputs = []
+            for out in vllm_outputs:
+                outputs.append(list(out.token_ids))
+            return outputs
+        
+        for i, datum in enumerate(ds):
+            datum['mc_response_prefixes_token_ids'] = get_response_prefixes(datum['response_token_ids'], datum['new_states'])
+            datum['mc_queries_token_ids'], datum['mc_queries_max_tokens'] = get_prefix_queries(datum['query_token_ids'], datum['mc_response_prefixes_token_ids'])
+            
+        all_mc_queries = []
+        all_mc_queries_max_tokens = []
+        for i, datum in enumerate(ds):
+            all_mc_queries.append(datum['mc_queries_token_ids'])
+            all_mc_queries_max_tokens.append(datum['mc_queries_max_tokens'])
+            
         flatten_mc_queries = []
         flatten_mc_queries_max_tokens = []
         count_queries = []
-        for mc_queries, max_tokens in zip(all_mc_queries, ds['mc_queries_max_tokens']):
+        for mc_queries, max_tokens in zip(all_mc_queries, all_mc_queries_max_tokens):
             flatten_mc_queries.extend(mc_queries)
             flatten_mc_queries_max_tokens.extend(max_tokens)
             count_queries.append(len(mc_queries))
@@ -337,12 +371,6 @@ def create_vineppo_training_episodes(
                 ]
             )
 
-        def extract_token_ids(vllm_outputs):
-            outputs = []
-            for out in vllm_outputs:
-                outputs.append(out.token_ids)
-            return outputs
-
         # split the mc outputs per datum
         mcs_token_ids = []
         start = 0
@@ -351,31 +379,59 @@ def create_vineppo_training_episodes(
             mcs_token_ids.append([extract_token_ids(out.outputs) for out in output_slice])
             start += count
             
-        ds = ds.add_column('mcs_token_ids', mcs_token_ids)
+        for i, datum in enumerate(ds):
+            mc_token_ids = mcs_token_ids[i]
+            mc_value_estimates = get_value_estimates(datum['sample'], datum['mc_response_prefixes_token_ids'], mc_token_ids)
+            datum['states'], datum['value_estimates'] = update_state_values(datum['states'], datum['value_estimates'], datum['new_states'], mc_value_estimates)
+            
+            
+        # remove unnecessary keys
+        for i, datum in enumerate(ds):
+            datum.pop('new_states')
+            datum.pop('mc_response_prefixes_token_ids')
+            datum.pop('mc_queries_token_ids')
+            datum.pop('mc_queries_max_tokens')
+            
         return ds
 
-    def get_step_values(sample, response_prefixes, mcs_token_ids):
-        step_values = []
-        for prefix, mcs in zip(response_prefixes, mcs_token_ids):
-            values = []
-            for mc in mcs:
-                full_text = tokenizer.decode(prefix + mc, skip_special_tokens=False)
-                score, _ = compute_reward(full_text, sample, EOS_TOKEN)
-                values.append(score)
-            step_values.append(sum(values) / len(values))
-        return {'step_values': step_values}
-        
-
-    def get_step_advantages(values):
-        advantages = [values[i] - values[i-1] for i in range(1, len(values))]
-        return {'step_advantages': advantages}
-
-
-    def get_tokens_advantages(step_boundaries: List[int], step_advantages: List[float]):
+    def get_tokens_advantages(states: List[int], value_estimates: List[float]):
         tokens_advantages = []
-        for i in range(len(step_boundaries) - 1):
-            tokens_advantages.extend([step_advantages[i]] * (step_boundaries[i+1] - step_boundaries[i]))
-        return {'tokens_advantages': tokens_advantages}
+        assert sorted(states) == states
+        for i in range(len(states) - 1):
+            length = states[i+1] - states[i]
+            advantage = value_estimates[i+1] - value_estimates[i]
+            tokens_advantages.extend([advantage] * length)
+        return tokens_advantages
+    
+    def propose_new_states_for_value_estimation(states, value_estimates, response_reward, length_of_response):
+        new_states = []
+        assert sorted(states) == states
+        assert len(value_estimates) == len(states)
+        
+        if len(states) == 0:
+            return [0]
+        
+        idx = 0
+        step_start = states[0]
+        
+        while idx < len(states):
+            if idx == len(states) - 1:
+                step_end = length_of_response
+                advantage_estimate = response_reward - value_estimates[idx]
+            else:
+                step_end = states[idx+1]
+                advantage_estimate = value_estimates[idx] - value_estimates[idx-1]
+            
+            if advantage_estimate != 0:
+                middle_step = step_start + (step_end - step_start) // 2
+                if middle_step != step_start:
+                    new_states.append(middle_step)
+            
+            step_start = step_end
+            idx += 1
+            
+        
+        return new_states
 
     assert len(all_generations) == len(all_finish_reasons)
     assert len(all_generations) == len(samples) * GENERATIONS_PER_SAMPLE
@@ -421,17 +477,35 @@ def create_vineppo_training_episodes(
         for rm in reward_metrics:
             for k, v in rm.items():
                 stats.setdefault(f"reward_metrics/{k}", []).append(v)
- 
-    ds = Dataset.from_dict({'query_token_ids': all_query_token_ids, 'response_token_ids': all_responses_token_ids, 'sample': all_samples, 'reward': all_rewards})
-    ds = ds.map(lambda x: {'step_boundaries': split_response(x['response_token_ids'])}, num_proc=4)
-    ds = mc_queries(ds)
-    ds = ds.map(lambda x: get_step_values(x['sample'], x['response_prefixes_token_ids'], x['mcs_token_ids']), num_proc=4)
-    ds = ds.map(lambda x: get_step_advantages(x['step_values']+[x['reward']]), num_proc=4) # the value of the last step is the reward of the response. 
-    ds = ds.map(lambda x: get_tokens_advantages(x['step_boundaries'], x['step_advantages']), num_proc=4)
+    
+    
+    ds = []
+    for i in range(len(all_samples)):
+        datum = {'query_token_ids': all_query_token_ids[i],
+                 'response_token_ids': all_responses_token_ids[i], 
+                 'sample': all_samples[i], 
+                 'reward': all_rewards[i],
+                 'states': [len(all_responses_token_ids[i])],
+                 'value_estimates': [all_rewards[i]],
+                 'new_states': split_response(all_responses_token_ids[i])
+                 }
+        ds.append(datum)        
+    
+    for i in range(VINEPPO_REFINEMENT_ITERATIONS):
+        print(f"vineppo credit refinement {i}th iteration")
+        ds = estimate_values_by_mc_rollouts(ds)
+        for i, datum in enumerate(ds):
+            datum['new_states'] = propose_new_states_for_value_estimation(datum['states'], datum['value_estimates'], datum['reward'], len(datum['response_token_ids']))
+     
+    all_advantages = []       
+    for i, datum in enumerate(ds):
+        datum['tokens_advantages'] = get_tokens_advantages(datum['states'], datum['value_estimates'])
+        all_advantages.append(datum['tokens_advantages'])
+    
     episodes = {
-        'all_query_token_ids': ds['query_token_ids'],
-        'all_response_token_ids': ds['response_token_ids'],
-        'all_advantages': ds['tokens_advantages'],
+        'all_query_token_ids': all_query_token_ids,
+        'all_response_token_ids': all_responses_token_ids,
+        'all_advantages': all_advantages,
     }
     
     return episodes, stats
@@ -511,13 +585,17 @@ def compute_pg_loss(
 
 def main():
     # Parse command line arguments
+    
     parser = argparse.ArgumentParser(description="Train R1 model with PPO")
     parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for PPO")
     parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-3B", help="Model name/path")
     parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
     parser.add_argument("--debug", action="store_true", help="Debug mode")
-    parser.add_argument("--vineppo_k", type=int, default=3, help="Number of MC samples to take for each response")
+    parser.add_argument("--algorithm", type=str, choices=['grpo', 'vineppo'], default='vineppo', help="Algorithm to use")
+    parser.add_argument("--vineppo_k", type=int, default=1, help="Number of MC samples to take for each response")
+    parser.add_argument("--vineppo_refinement_iterations", type=int, default=1, help="Number of refinement iterations to run")
+    parser.add_argument("--run_id", type=str, default=None, help="Run ID")
     args = parser.parse_args()
 
     # Needed to stop DeepSpeed from complaining
@@ -569,7 +647,7 @@ def main():
     TOP_K = -1  # no top k
     # Number of MC samples to take for each response
     VINEPPO_K = args.vineppo_k
-
+    VINEPPO_REFINEMENT_ITERATIONS = args.vineppo_refinement_iterations
     # DeepSpeed configuration
     deepspeed_config = {
         "bf16": {"enabled": True},
@@ -597,7 +675,10 @@ def main():
     }
 
     model_name_short = MODEL_NAME.split("/")[-1]
-    RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}_vine_debug2"
+    if args.run_id is None:
+        RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}"
+    else:
+        RUN_NAME = args.run_id
     EXP_DIR = SCRATCH / "deepseek_hackathon" / RUN_NAME
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -739,7 +820,7 @@ def main():
         #########################################################
 
         eval_stats = None
-        if iteration % 25 == 0:
+        if iteration % 25 == 0 and iteration > 0:
             print("Evaluating on eval set...")
             eval_episodes, eval_stats = evaluate_on_test_set(
                 inference_engine=inference_engine,
@@ -800,22 +881,36 @@ def main():
         print(f"Time taken to generate {len(all_generations)} responses: {time.time() - gen_time} seconds")
 
         # Process responses and calculate rewards
-        episodes, episodes_stats = create_vineppo_training_episodes(
-            inference_engine=inference_engine,
-            samples=samples,
-            all_generations=all_generations,
-            all_finish_reasons=all_finish_reasons,
-            tokenizer=tokenizer,
-            EOS_TOKEN_ID=EOS_TOKEN_ID,
-            EOS_TOKEN=EOS_TOKEN,
-            GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
-            MAX_RESPONSE_TOKENS=MAX_RESPONSE_TOKENS,
-            VINEPPO_K=VINEPPO_K,
-            TEMPERATURE=TEMPERATURE,
-            TOP_P=TOP_P,
-            TOP_K=TOP_K,
-            logit_processor=logit_processor,
-        )
+        if args.algorithm == 'grpo':
+            episodes, episodes_stats = create_training_episodes(
+                samples=samples,
+                all_generations=all_generations,
+                all_finish_reasons=all_finish_reasons,
+                tokenizer=tokenizer,
+                EOS_TOKEN_ID=EOS_TOKEN_ID,
+                EOS_TOKEN=EOS_TOKEN,
+                GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
+            )
+        elif args.algorithm == 'vineppo':
+            episodes, episodes_stats = create_vineppo_training_episodes(
+                inference_engine=inference_engine,
+                samples=samples,
+                all_generations=all_generations,
+                all_finish_reasons=all_finish_reasons,
+                tokenizer=tokenizer,
+                EOS_TOKEN_ID=EOS_TOKEN_ID,
+                EOS_TOKEN=EOS_TOKEN,
+                GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
+                MAX_RESPONSE_TOKENS=MAX_RESPONSE_TOKENS,
+                VINEPPO_K=VINEPPO_K,
+                VINEPPO_REFINEMENT_ITERATIONS=VINEPPO_REFINEMENT_ITERATIONS,
+                TEMPERATURE=TEMPERATURE,
+                TOP_P=TOP_P,
+                TOP_K=TOP_K,
+                logit_processor=logit_processor,
+            )
+        else:
+            raise ValueError(f"Invalid algorithm: {args.algorithm}")
         
         inference_engine.sleep(1)
         gc.collect()
