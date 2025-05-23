@@ -3,11 +3,16 @@
 
 Implementation of DeepSeek R1-zero style training with:
 
-- Single 80G GPU
+- Single 80G GPU (and also multi-GPU)
 - No RL Library 
-- 3B Base Model 
+- 3B Base Model (and also 7B models)
 - Full Parameter Tuning 
 - Efficient (less than 10h)
+- Up to 32K context size for 3B model with multi-GPU (or 16K context size for 7B model)
+
+## News
+- **May 2025**: Added multi-GPU support for faster training and 7B models
+- **May 2025**: Added VinePPO episode generation
 
 Inspired by [TinyZero](https://github.com/Jiayi-Pan/TinyZero) and [Mini-R1](https://www.philschmid.de/mini-deepseek-r1), but designed to be much **simpler**, **cleaner**, and **faster**, with every line of code visible and understandable.
 
@@ -53,8 +58,28 @@ Inspired by [TinyZero](https://github.com/Jiayi-Pan/TinyZero) and [Mini-R1](http
 
    > If using uv, you can run with either `uv run nano_r1_script.py` or activate the env with `source .venv/bin/activate` and run with `python nano_r1_script.py`
 
+## Multi-GPU Training
+Here is the command to run the training script with 4 GPUs:
+```bash
+python nano_r1_script.py --nproc 4  # Use 4 GPUs
+```
+
+## Batch Sizes for different context lengths
+
+| Context Length | 3B Model (per_device_batch_size) | 7B Model (per_device_batch_size) |
+|---------------|----------------------------------|----------------------------------|
+| 1024            | 32                               | 16                               |
+| 2048            | 16                               | 8                               |
+| 4K            | 8                               | 4                               |
+| 8K            | 4                               | 2                                |
+| 16K           | 2                                | 1                                |
+| 32K           | 1                                | N/A                              |
+
+> Note: These batch sizes are optimized for 4xA100 80GB GPUs. For other GPU types, you may need to adjust the batch sizes accordingly.
+
 ## Todos
 - [ ] Full evaluation suite
+- [x] Multi-GPU support (Added March 2024)
 
 ## Citation
 If you use this codebase in your research, please cite us using:
