@@ -81,6 +81,12 @@ python nano_r1_script.py --nproc 4  # Use 4 GPUs
 - [ ] Full evaluation suite
 - [x] Multi-GPU support (Added March 2024)
 
+## Acknowledgement
+We gratefully acknowledge the support of Lambda for providing compute resources through their research compute grant.
+<p align="left">
+  <img src="https://lambda.ai/hubfs/lambda%20logo%202.svg" alt="Lambda AI" width="200">
+</p>
+
 ## Citation
 If you use this codebase in your research, please cite us using:
 
