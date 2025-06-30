@@ -512,11 +512,10 @@ def fix_oov_logits_processor(inference_engine: LLM):
     return fix_oov
 
 
-def close_to_zero_percentage(tensor: torch.Tensor, mask: torch.Tensor, threshold: float = 1e-8) -> torch.Tensor:
+def close_to_zero(tensor: torch.Tensor, mask: torch.Tensor, threshold: float = 1e-8) -> torch.Tensor:
     """
-    Computes the percentage of values in the tensor that are close to zero.
+    Computes the number of values in the tensor that are close to zero.
     """
     close_to_zero_mask = torch.abs(tensor) < threshold
     num_close_to_zero = (close_to_zero_mask * mask).sum()
-    total_values = mask.sum()
-    return num_close_to_zero / total_values
+    return num_close_to_zero

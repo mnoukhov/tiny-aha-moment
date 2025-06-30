@@ -21,6 +21,7 @@ from vllm import LLM, CompletionOutput, RequestOutput, SamplingParams
 import wandb
 from utils import (
     clean_up_checkpoints,
+    close_to_zero,
     compute_token_log_probs,
     dump_episodes,
     evaluate_on_test_set,
@@ -289,19 +290,6 @@ def create_training_episodes(
     return episodes, stats
 
 
-def split_response(response_token_ids: List[int]) -> List[int]:
-    last_index = len(response_token_ids)
-    step_boundaries = [0]
-    cursor = 0
-    while cursor < last_index:
-        cursor += 100
-        if cursor >= last_index:
-            break
-        step_boundaries.append(cursor)
-
-    return step_boundaries
-
-
 def create_vineppo_training_episodes(
     *,
     inference_engine: LLM = None,
@@ -318,6 +306,55 @@ def create_vineppo_training_episodes(
     TOP_P: float = None,
     TOP_K: int = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    *** EXPERIMENTAL ***
+    Process model generations and calculate rewards for VinePPO training episodes.
+
+    This function implements the VinePPO algorithm,
+    which uses Monte Carlo rollouts to estimate state values and compute token-level advantages.
+    See: https://arxiv.org/abs/2410.01679
+
+    Note that it only differs from GRPO in the way it computes advantages. So the rest of the code stays the same.
+
+    The algorithm works as follows:
+    1. Split each response into intermediate states (every 100 tokens)
+    2. For each intermediate state, generate VINEPPO_K Monte Carlo rollouts
+    3. Estimate state values by averaging rewards from these rollouts
+    4. Compute token-level advantages based on value differences between states
+
+    Args:
+        samples: List of input samples, each containing:
+            - input_ids: List[int], tokenized input prompt
+            - nums: List[int], numbers to use in equation
+            - target: int, target value for equation
+        all_generations: List of token ID sequences for each generated response
+        all_finish_reasons: List of finish reasons for each generation ("stop" or other)
+
+    Returns:
+        Tuple containing:
+        1. Dictionary with processed data for training:
+            - all_query_token_ids: List[List[int]], input token IDs repeated for each generation
+            - all_response_token_ids: List[List[int]], response token IDs with EOS tokens added
+            - all_advantages: List[List[float]], advantage values repeated for each token
+        2. Dictionary with generation statistics:
+            - response_lengths: List[int], lengths of generated responses
+            - rewards: List[float], raw reward values
+            - non_stop_rate: List[bool], whether each generation ended naturally
+            - reward_metrics/*: Various reward component metrics
+    """
+
+    def split_response(response_token_ids: List[int]) -> List[int]:
+        last_index = len(response_token_ids)
+        step_boundaries = [0]
+        cursor = 0
+        while cursor < last_index:
+            cursor += 100
+            if cursor >= last_index:
+                break
+            step_boundaries.append(cursor)
+
+        return step_boundaries
+
     def estimate_values_by_mc_rollouts(episodes_raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         def get_response_prefixes(
             response_token_ids: List[int], states_for_value_estimation: List[int]
@@ -581,7 +618,9 @@ def compute_pg_loss(
     kl_penalty = torch.exp(ref_logratio) - 1 - ref_logratio  # [batch_size, seq_len-1]
     kl_penalty = kl_penalty * labels_mask  # [batch_size, seq_len-1]
 
-    entropy = -logps.sum() / labels_mask.sum()  # scalar
+    with torch.no_grad():
+        entropy = -logps.sum() / labels_mask.sum()  # scalar
+        zero_advantages = close_to_zero(advantages, labels_mask)  # scalar
 
     policy_loss = -logps * advantages[..., 1:]  # [batch_size, seq_len-1]
     policy_loss = policy_loss * labels_mask  # [batch_size, seq_len-1]
@@ -592,6 +631,7 @@ def compute_pg_loss(
         "policy_loss": policy_loss.sum().item() / total_response_len.item(),
         "kl_penalty": kl_penalty.sum().item() / total_response_len.item(),
         "entropy": entropy.item() / total_response_len.item(),
+        "zero_advantages_ratio": zero_advantages.item() / total_response_len.item(),
     }
 
     return loss, metrics
@@ -611,7 +651,7 @@ def main(rank: int):
     if dist.get_rank() != 0:
         logger.setLevel(logging.ERROR)
 
-    if args.debug:
+    if args.debug and nproc == 1:
         import debugpy
 
         debugpy.listen(5678)
@@ -716,6 +756,7 @@ def main(rank: int):
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     # Rank 0 will preprocess the dataset first
     if dist.get_rank() != 0:
+        # Other ranks will wait for rank 0 to enter the barrier
         dist.barrier(device_ids=[torch.cuda.current_device()])
     dataset = dataset.map(
         preprocess_example,
@@ -728,6 +769,7 @@ def main(rank: int):
         desc="Preprocessing dataset",
     )
     if dist.get_rank() == 0:
+        # Rank 0 will enter the barrier so that other ranks can start preprocessing
         dist.barrier(device_ids=[torch.cuda.current_device()])
     dist.barrier(device_ids=[torch.cuda.current_device()])
 
@@ -790,7 +832,7 @@ def main(rank: int):
 
     inference_engine = LLM(
         model=MODEL_NAME,
-        skip_tokenizer_init=False,  # so LLM does not complain about the tokens present in the model but not in the tokenizer (see https://github.com/vllm-project/vllm/issues/13175), remove when fixed in vllm or qwen.
+        skip_tokenizer_init=False,
         gpu_memory_utilization=0.3,
         enable_prefix_caching=True,
         swap_space=4,
@@ -811,7 +853,7 @@ def main(rank: int):
     # Wandb for logging. Only rank 0 will initialize wandb
     if dist.get_rank() == 0:
         wandb.init(
-            project="r1-aha-moment",
+            project="nano-aha-moment",
             name=RUN_NAME,
             resume="allow",
             config={
@@ -1084,7 +1126,6 @@ def main(rank: int):
             logger.info(f"KEY METRICS: {selected_metrics}")
 
         if iteration % 50 == 0 and iteration != 0:
-            logger.info("Saving hf model")
             ckpt_dir = EXP_DIR / "checkpoints" / f"ckpt_{iteration:06d}"
 
             logger.info("Saving HF model")
