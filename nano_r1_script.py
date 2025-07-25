@@ -77,7 +77,7 @@ def format_correct_func(completion: str, EOS_TOKEN: str) -> float:
         # Check if the format is correct
         # Pattern means:
         # 3) <answer>...anything...</answer>
-        regex = r"^<answer>([\s\S]*?)<\/answer>"
+        regex = r"^<answer>(.*?)<\/answer>"
         match = re.search(regex, completion, re.DOTALL)
 
         if match is None or len(match.groups()) != 1:
@@ -531,7 +531,7 @@ def main(args):
             project="nano-aha-moment",
             name=RUN_NAME,
             resume="allow",
-            config={},
+            config=vars(args),
         )
 
     sampler_rng = np.random.default_rng(seed=args.seed)
