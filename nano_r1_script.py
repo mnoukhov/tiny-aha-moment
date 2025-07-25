@@ -257,7 +257,8 @@ def create_training_episodes(
 
         stats["rewards"].extend(rewards)
         stats["non_stop_rate"].extend([fr != "stop" for fr in finish_reasons])
-        stats["response_lengths"].extend([len(ids) for ids in response_token_ids])
+        response_lengths = [len(ids) for ids in response_token_ids]
+        stats["response_lengths"].extend(response_lengths)
         for rm in reward_metrics:
             for k, v in rm.items():
                 stats.setdefault(f"reward_metrics/{k}", []).append(v)
@@ -590,7 +591,7 @@ def main(args, rank: int):
             temperature=0.3,
             max_tokens=MAX_RESPONSE_TOKENS,
             n=1,
-            detokenize=False,
+            detokenize=True,
             stop=["</answer>", EOS_TOKEN],
             include_stop_str_in_output=True,
         )
@@ -626,7 +627,7 @@ def main(args, rank: int):
             top_p=TOP_P,
             top_k=TOP_K,
             max_tokens=MAX_RESPONSE_TOKENS,
-            detokenize=False,
+            detokenize=True,
             stop=["</answer>", EOS_TOKEN],
             include_stop_str_in_output=True,
         )
