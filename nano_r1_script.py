@@ -145,10 +145,10 @@ def compute_reward(completion: str, sample: Dict[str, Any], EOS_TOKEN: str) -> T
     nums = sample["nums"]
     target = sample["target"]
 
-    format_reward = format_reward_func(completion, EOS_TOKEN) * 0.1
+    format_reward = format_reward_func(completion, EOS_TOKEN)
     equation_reward = equation_reward_func(completion=completion, nums=nums, target=target)
 
-    reward = format_reward + equation_reward
+    reward = equation_reward
 
     metrics = {
         "format_reward": format_reward,
@@ -404,7 +404,13 @@ def main(args):
     else:
         RUN_NAME = args.run_id
 
-    EXP_DIR = Path(args.output_dir)
+    model_name_short = MODEL_NAME.split("/")[-1]
+    RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}"
+    EXP_DIR = Path(args.output_dir) / RUN_NAME
+
+    if EXP_DIR.exists():
+        logging.warning(f"You are running an experiment that will restart from {EXP_DIR}")
+
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Logs and Checkpoints will be saved to: {EXP_DIR}")
@@ -447,7 +453,7 @@ def main(args):
     dist.barrier(device_ids=[torch.cuda.current_device()])
 
     # Split dataset
-    train_test_split = dataset.train_test_split(test_size=500, seed=42)
+    train_test_split = dataset.train_test_split(test_size=500, seed=args.seed)
     train_dataset = train_test_split["train"]
     orig_train_dataset_size = len(train_dataset)
     test_dataset = train_test_split["test"]
@@ -528,7 +534,7 @@ def main(args):
             config={},
         )
 
-    sampler_rng = np.random.default_rng(seed=42)
+    sampler_rng = np.random.default_rng(seed=args.seed)
     NUM_SAMPLES_PER_ITERATION = EPISODES_PER_ITERATION // GENERATIONS_PER_SAMPLE
 
     # Load checkpoint if it exists
@@ -795,6 +801,7 @@ def main(args):
 if __name__ == "__main__":
     # Parse command line arguments
     arg_parser = argparse.ArgumentParser(description="Train small model on countdown with GRPO")
+    arg_parser.add_argument("--seed", type=int, default=42, help="A number that initializes our ")
     arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
     arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
     arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B", help="Model name/path")
