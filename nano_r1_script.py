@@ -216,6 +216,8 @@ def create_training_episodes(
 
     stats = {
         "response_lengths": [],
+        "response_lengths_correct": [],
+        "response_lengths_wrong": [],
         "rewards": [],
         "non_stop_rate": [],
         "pass_at_group": [],
@@ -243,6 +245,12 @@ def create_training_episodes(
         stats["non_stop_rate"].extend([fr != "stop" for fr in finish_reasons])
         response_lengths = [len(ids) for ids in response_token_ids]
         stats["response_lengths"].extend(response_lengths)
+        stats["response_lengths_correct"].extend(
+            [length for length, reward in zip(response_lengths, rewards) if reward >= 1.0]
+        )
+        stats["response_lengths_wrong"].extend(
+            [length for length, reward in zip(response_lengths, rewards) if reward < 1.0]
+        )
         for rm in reward_metrics:
             for k, v in rm.items():
                 stats.setdefault(f"reward_metrics/{k}", []).append(v)
@@ -551,7 +559,7 @@ def main(args):
         )
 
         eval_stats = None
-        if iteration % args.eval_every == 0 and iteration > 0:
+        if iteration % (NUM_ITERATIONS // args.num_evals) == 0 and iteration > 0:
             logger.info("Evaluating on eval set...")
             eval_episodes, eval_stats = evaluate_on_test_set(
                 inference_engine=inference_engine,
@@ -782,7 +790,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--per_device_batch_size", type=int, default=16, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
-    arg_parser.add_argument("--eval_every", type=int, default=10, help="Do an eval every n steps")
+    arg_parser.add_argument("--num_evals", type=int, default=5, help="How many evals to do over the training")
     arg_parser.add_argument(
         "--total_episodes", type=int, default=6400, help="Total number of prompt-completions to generate per update"
     )
