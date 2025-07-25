@@ -47,7 +47,6 @@ logger.addHandler(ch)
 def preprocess_example(
     example: Dict[str, Any],
     tokenizer: AutoTokenizer,
-    SYSTEM_MESSAGE: str,
     PROMPT_TEMPLATE: str,
 ):
     numbers: List[int] = example["nums"]
