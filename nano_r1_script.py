@@ -345,7 +345,7 @@ def main(args):
 
     # RL parameters
     # Total number of training iterations
-    NUM_ITERATIONS = 1000
+    NUM_ITERATIONS = args.total_episodes // args.episodes_per_step
     # Number of episodes to collect per iteration for training
     EPISODES_PER_ITERATION = args.episodes_per_step
     # Number of responses to generate for each input prompt
@@ -801,6 +801,9 @@ if __name__ == "__main__":
     arg_parser.add_argument("--per_device_batch_size", type=int, default=1, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
+    arg_parser.add_argument(
+        "--total_episodes", type=int, default=12800, help="Total number of prompt-completions to generate per update"
+    )
     arg_parser.add_argument(
         "--episodes_per_step", type=int, default=256, help="Total number of prompt-completions to generate per update"
     )
