@@ -801,6 +801,11 @@ if __name__ == "__main__":
         default="output",
         help="Directory to output checkpoints etc",
     )
+    arg_parser.add_argument(
+        "--do_save",
+        action="store_true",
+        help="Save final checkpoints to output_dir",
+    )
     args = arg_parser.parse_args()
 
     main(args)
