@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
 import deepspeed
@@ -436,8 +437,8 @@ def main(args, rank: int):
     else:
         RUN_NAME = args.run_id
 
-    EXP_DIR = args.output_dir
-    os.makedirs(EXP_DIR)
+    EXP_DIR = Path(args.output_dir)
+    EXP_DIR.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Logs and Checkpoints will be saved to: {EXP_DIR}")
 
