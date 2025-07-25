@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Tuple, Union
 import deepspeed
 import numpy as np
 import torch
-import wandb
 import torch.distributed as dist
+import wandb
 from datasets import load_dataset
 from deepspeed import DeepSpeedEngine
 from tqdm import trange
