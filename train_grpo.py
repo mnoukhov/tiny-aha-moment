@@ -790,8 +790,8 @@ if __name__ == "__main__":
     arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
     arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
     arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B-base", help="Model name/path")
-    arg_parser.add_argument("--per_device_batch_size", type=int, default=16, help="Per device batch size")
-    arg_parser.add_argument("--max_response_tokens", type=int, default=800, help="Max response tokens")
+    arg_parser.add_argument("--per_device_batch_size", type=int, default=8, help="Per device batch size")
+    arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=5e-7, help="Learning rate for training")
     arg_parser.add_argument("--num_evals", type=int, default=5, help="How many evals to do over the training")
     arg_parser.add_argument(

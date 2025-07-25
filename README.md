@@ -24,6 +24,12 @@ For speed, we're using a smaller model that has better mid-training (Qwen3-1.7B-
 
 We're going to train for 50 steps on the Countdown game and see what happens. With a 1.7B model this will take about 18 minutes.
 
+```
+python train_grpo.py 
+```
+
+Feel free to add `--seed SOME_NUMBER` and make it different than your neighbours. See how different your results turn out
+
 The major thing is we're looking for our model to learn the format of our `<answer> </answer>` format and learn to use reasoning, backtracking, verification and all those great skills!
 
 Look at the scores, the format correctness, how the response length changes.
@@ -61,6 +67,8 @@ Can we figure out how good our model *will* be after training before training? O
 To do this, we can look at the `train/pass_at_group` metric that tracks whether there was at least 1 answer in our group of `num_responses_per_prompt` that got it right. Can we increase the number of `num_responses_per_prompt` to try and get more signal?
 
 Let's try other models like a bigger / better version of 2.5 `Qwen/Qwen2.5-1.5B-base`. If that model doesn't work, let's take a model that has been SFTed on correct reasoning traces for countdown but with a slightly different template `CohenQu/Qwen2.5-1.5B_Countdown-v1`. What if we change the `PROMPT_TEMPLATE` to match it exactly?
+
+Our correct answers are generally shorter than our wrong answers. What if we just reduce our `--max_response_tokens` to something like `512`, now generating a shorter maximum length response. How does training proceed?
 
 ## Citation
 
