@@ -350,24 +350,7 @@ def compute_pg_loss(
     return loss, metrics
 
 
-def main(rank: int):
-    # Parse command line arguments
-    arg_parser = argparse.ArgumentParser(description="Train small model on countdown with GRPO")
-    arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
-    arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
-    arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B", help="Model name/path")
-    arg_parser.add_argument("--per_device_batch_size", type=int, default=8, help="Per device batch size")
-    arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
-    arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
-    arg_parser.add_argument("--debug", action="store_true", help="Debug mode")
-    arg_parser.add_argument("--num_responses_per_prompt", type=int, default=8, help="Number of MC samples to take for each response")
-    arg_parser.add_argument("--run_id", type=str, default=None, help="Run ID")
-    arg_parser.add_argument("--output_dir", type=str, default="output", help="Directory to output checkpoints etc")
-    arg_parser.add_argument("--nproc", type=int, default=1, help="Number of processes (data parallelism) to use")
-
-
-    args = arg_parser.parse_args()
-
+def main(args, rank: int):
     # rank = int(os.environ.get("RANK", "0"))
     nproc = int(os.environ.get("WORLD_SIZE", "1"))
     nproc = args.nproc
@@ -847,6 +830,20 @@ def main(rank: int):
 
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    arg_parser = argparse.ArgumentParser(description="Train small model on countdown with GRPO")
+    arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
+    arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
+    arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B", help="Model name/path")
+    arg_parser.add_argument("--per_device_batch_size", type=int, default=8, help="Per device batch size")
+    arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
+    arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
+    arg_parser.add_argument("--debug", action="store_true", help="Debug mode")
+    arg_parser.add_argument("--num_responses_per_prompt", type=int, default=8, help="Number of MC samples to take for each response")
+    arg_parser.add_argument("--run_id", type=str, default=None, help="Run ID")
+    arg_parser.add_argument("--output_dir", type=str, default="output", help="Directory to output checkpoints etc")
+    arg_parser.add_argument("--nproc", type=int, default=1, help="Number of processes (data parallelism) to use")
+
     args = arg_parser.parse_args()
 
     n_gpus = torch.cuda.device_count()
@@ -854,6 +851,6 @@ if __name__ == "__main__":
         raise ValueError(f"Requested {args.nproc} processes, but only {n_gpus} GPUs are available.")
 
     if args.nproc == 1:
-        main(rank=0)
+        main(args, rank=0)
     else:
-        torch.multiprocessing.spawn(main, nprocs=args.nproc)
+        torch.multiprocessing.spawn(args, main, nprocs=args.nproc)
