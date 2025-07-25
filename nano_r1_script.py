@@ -58,7 +58,7 @@ def preprocess_example(
 
 def format_reward_func(completion: str, EOS_TOKEN: str) -> float:
     """
-    Format: <think>...</think><answer>...</answer>
+    Format: Reasoning process <answer> answer here <answer>
 
     Also checks that the content within <answer>...</answer> conforms to a
     specified pattern (only digits, + - * / ( ) . and whitespace).
@@ -145,8 +145,7 @@ def compute_reward(completion: str, sample: Dict[str, Any], EOS_TOKEN: str) -> T
     nums = sample["nums"]
     target = sample["target"]
 
-    # format_reward = format_reward_func(completion, EOS_TOKEN)
-    format_reward = 0
+    format_reward = format_reward_func(completion, EOS_TOKEN) * 0.1
     equation_reward = equation_reward_func(completion=completion, nums=nums, target=target)
 
     reward = format_reward + equation_reward
@@ -221,6 +220,7 @@ def create_training_episodes(
         "response_lengths": [],
         "rewards": [],
         "non_stop_rate": [],
+        "pass_at_group": [],
     }
 
     for sample, group_indices in zip(samples, groups):
@@ -239,6 +239,7 @@ def create_training_episodes(
         all_responses_token_ids.extend(response_token_ids)
         all_advantages.extend(per_token_advantages)
 
+        stats["pass_at_group"].append(0 if max(rewards) < 1 else 1)
         stats["rewards"].extend(rewards)
         stats["non_stop_rate"].extend([fr != "stop" for fr in finish_reasons])
         response_lengths = [len(ids) for ids in response_token_ids]
@@ -356,7 +357,7 @@ def main(args):
     # Batch size for each GPU device during training
     PER_DEVICE_BATCH_SIZE = args.per_device_batch_size
     # Learning rate for model updates
-    LEARNING_RATE = 1e-6
+    LEARNING_RATE = 5e-7
 
     # Sampling parameters
     # Maximum number of tokens to generate in each response
@@ -413,11 +414,11 @@ def main(args):
     ############################################
 
     PROMPT_TEMPLATE = (
-        "Using some numbers, create an equation that equals a target number. "
+        "Combine a couple numbers in a simple algebraic equation so that it equals a target number. "
         "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
         "Think about the reasoning process then return the final equation and answer in <answer> </answer> tags, "
         "for example after thinking step by step (5 + 2) - 3 = 4 therefore <answer>(5 + 2) - 3</answer>.\n\n"
-        "Use the number {numbers} to create an equation that equals {target}. "
+        "Use the number {numbers} to create an equation that equals {target}.\n\n"
         "Let's solve this step by step."
     )
 
@@ -759,6 +760,7 @@ def main(args):
                 "train/rewards",
                 "train/reward_metrics/format_reward",
                 "train/reward_metrics/equation_reward",
+                "train/pass_at_group",
                 "train/response_lengths",
                 "eval/rewards",
                 "eval/reward_metrics/format_reward",
