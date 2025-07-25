@@ -548,7 +548,6 @@ def main(args, rank: int):
         device=f"cuda:{torch.cuda.current_device()}",
         tensor_parallel_size=1,
     )
-    logits_processors = None
 
     see_memory_usage("After initializing inference engine", force=dist.get_rank() == 0)
 
@@ -593,6 +592,7 @@ def main(args, rank: int):
             n=1,
             detokenize=False,
             stop=["</answer>", EOS_TOKEN],
+            include_stop_str_in_output=True,
         )
 
         eval_stats = None
@@ -628,7 +628,7 @@ def main(args, rank: int):
             max_tokens=MAX_RESPONSE_TOKENS,
             detokenize=False,
             stop=["</answer>", EOS_TOKEN],
-            logits_processors=logits_processors,
+            include_stop_str_in_output=True,
         )
 
         # Sample training batch
