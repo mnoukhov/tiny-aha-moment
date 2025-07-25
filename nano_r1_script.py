@@ -77,7 +77,7 @@ def format_correct_func(completion: str, EOS_TOKEN: str) -> float:
         # Check if the format is correct
         # Pattern means:
         # 3) <answer>...anything...</answer>
-        regex = r"^<answer>(.*?)<\/answer>"
+        regex = r"<answer>(.*?)<\/answer>"
         match = re.search(regex, completion, re.DOTALL)
 
         if match is None or len(match.groups()) != 1:
@@ -570,7 +570,7 @@ def main(args):
         )
 
         eval_stats = None
-        if iteration % 25 == 0 and iteration > 0 and dist.get_rank() == 0:  # Only rank 0 will evaluate:
+        if iteration % args.eval_every == 0 and iteration > 0 and dist.get_rank() == 0:  # Only rank 0 will evaluate:
             logger.info("Evaluating on eval set...")
             eval_episodes, eval_stats = evaluate_on_test_set(
                 inference_engine=inference_engine,
@@ -613,7 +613,7 @@ def main(args):
 
         # Sample responses
         outputs = inference_engine.generate(
-            prompt_token_ids=samples["input_ids"],
+            prompts=samples["input_ids"],
             sampling_params=train_sampling_params,
         )
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
@@ -808,6 +808,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--per_device_batch_size", type=int, default=1, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
+    arg_parser.add_argument("--eval_every", type=int, default=10, help="Do an eval every n steps")
     arg_parser.add_argument(
         "--total_episodes", type=int, default=12800, help="Total number of prompt-completions to generate per update"
     )
