@@ -441,7 +441,7 @@ def main(args, rank: int):
     else:
         RUN_NAME = args.run_id
 
-    EXP_DIR = args.output_dir / RUN_NAME
+    EXP_DIR = args.output_dir
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Logs and Checkpoints will be saved to: {EXP_DIR}")
