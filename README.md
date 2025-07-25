@@ -1,101 +1,53 @@
-# nanoAhaMoment: Single File "RL for LLM" Library
-> Amirhossein Kazemnejad*, Milad Aghajohari*, Alessandro Sordoni, Aaron Courville, Siva Reddy
+# Playing with Reasoning, GRPO, and Countdown
 
-Implementation of DeepSeek R1-zero style training with:
+## Setup
 
-- Single 80G GPU (and also multi-GPU)
-- No RL Library 
-- 3B Base Model (and also 7B models with multi-GPU)
-- Full Parameter Tuning 
-- Efficient (Competetive performance to verl but much simpler)
-- Up to 32K context size for 3B model with multi-GPU (or 16K context size for 7B model)
-
-## News
-- **June 2025**: Added multi-GPU support for faster training and 7B models
-- **June 2025**: Added VinePPO episode generation (experimental)
-
-Inspired by [TinyZero](https://github.com/Jiayi-Pan/TinyZero) and [Mini-R1](https://www.philschmid.de/mini-deepseek-r1), but designed to be much **simpler**, **cleaner**, and **faster**, with every line of code visible and understandable.
-
-## Karpathy-style Detailed Lecture on YouTube
-
-- [nanoAhaMoment: RL for LLM from Scratch with 1 GPU - Part 1](https://youtu.be/ZMO5tv30ri8)
-- [nanoAhaMoment: RL for LLM from Scratch with 1 GPU - Part 2](https://youtu.be/dxhCyhc_bcQ)
-
-## File Descriptions
-- `nano_r1.ipynb` is the interactive single file jupyter notebook with tutorial.
-- `nano_r1_script.py` is also just the `nano_r1.ipynb` but for convenience of running with python and multi-GPU support.
-- `notebooks/checkpoint_playground.ipynb` is a notebook for comparing different model checkpoints (including our trained model) and playing with them.
-- [🤗 McGill-NLP/nano-aha-moment-3b](https://huggingface.co/McGill-NLP/nano-aha-moment-3b): The HF model trained using the above script (~60\% Accuracy on CountDown Task)
-
-## Setup Instructions
-
-1. **Clone the repository**  
-   ```bash
-   git clone https://github.com/McGill-NLP/nano-aha-moment.git
-   ```
-
-2. **Install dependencies**  
-   First, make sure cuda 12.4 is installed.
-   
-   Install PyTorch:
-   ```bash
-   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
-   ```
-   
-   Install the rest of the dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   **Alternative Installation with uv (Optional)**  
-   ```bash
-   uv sync
-   uv sync --extra compile  # Install flash-attention
-   ```
-
-3. **Run the training script**  
-   Open `nano_r1.ipynb` or `nano_r1_script.py` and start training.
-
-   > If using uv, you can run with either `uv run nano_r1_script.py` or activate the env with `source .venv/bin/activate` and run with `python nano_r1_script.py`
-
-## Multi-GPU Training
-Here is the command to run the training script with 4 GPUs:
-```bash
-python nano_r1_script.py --nproc 4  # Use 4 GPUs
+If your machine doesn't have deepspeed, wandb, or flash-attn install as below
+```
+pip install deepspeed==0.16.9 wandb
+pip install flash-attn --no-build-isolation
 ```
 
-## Batch Sizes for different context lengths
+We do logging to wandb. I highly recommend having an account for experiment tracking. Sign up on wandb.ai then in the terminal
 
-| Context Length | 3B Model (per_device_batch_size) | 7B Model (per_device_batch_size) |
-|---------------|----------------------------------|----------------------------------|
-| 1024            | 32                               | 16                               |
-| 2048            | 16                               | 8                               |
-| 4K            | 8                               | 4                               |
-| 8K            | 4                               | 2                                |
-| 16K           | 2                                | 1                                |
-| 32K           | 1                                | N/A                              |
+```
+wandb login
+```
 
-> Note: These batch sizes are optimized for 4xA100 80GB GPUs. For other GPU types, you may need to adjust the batch sizes accordingly.
+and follow the instructions
 
-## Todos
-- [ ] Full evaluation suite
-- [x] Multi-GPU support (Added June 2025)
+## Lets Reproduce Deepseek R1 (kinda) 
 
-## Acknowledgement
-We gratefully acknowledge the support of Lambda for providing compute resources through their research compute grant.
-<p align="left">
-  <img src="https://lambda.ai/hubfs/lambda%20logo%202.svg" alt="Lambda AI" width="200">
-</p>
+Jiayi Pan made a little repro of Deepseek R1's "aha moment" see the tweets \url{https://x.com/jiayi_pirate/status/1882839370505621655}
+
+For speed, we're using a smaller model that has better mid-training (Qwen3-0.6B-base vs Qwen2.5 used by Jiayi).
+
+The major thing is we're looking for our model to learn the format of our `<answer> </answer>` format and learn to use reasoning, backtracking, verification and all those great skills!
+
+Look at the scores, the format correctness, how the response length changes.
+
+Look at the specific questions and responses in the `episodes` in wandb.
+
+Look at the `train/loss`. What's going on?
+
+## Let's look at some issues with GRPO?
+
+Let's look at some issues with GRPO as pointed out by this paper: \url{https://arxiv.org/abs/2503.20783}
+
+We've got three things to check out
+1. Is our prompt template actualling making our model worse?
+2. Does the length normalization make our wrong answers much longer than our right answer? What happens if we remove it?
+3. What effect does dividing by the standard deviation of our group do?
+
+## Further exploration
+
+What happens if we use a weaker model for our experiments? `Qwen/Qwen2.5-0.5B-base` is the old version of Qwen. Can it learn to play Countdown?
+
+Can we figure out how good our model *will* be after training before training? One thing to look at is whether it *can* answer questions at all.
+To do this, we can look at the `train/pass_at_group` metric that tracks whether there was at least 1 answer in our group of `num_responses_per_prompt` that got it right.
+
+Let's try other models like a bigger / better version of 2.5 `Qwen/Qwen2.5-1.5B-base`. If that model doesn't work, let's take a model that has been SFTed on correct reasoning traces for countdown but with a slightly different template `CohenQu/Qwen2.5-1.5B_Countdown-v1`. What if we change the `PROMPT_TEMPLATE` to match it exactly?
 
 ## Citation
-If you use this codebase in your research, please cite us using:
 
-```bibtex
-@misc{Kazemnejad2025:NanoAhaMoment,
-  author       = {Amirhossein Kazemnejad and Milad Aghajohari and Alessandro Sordoni and Aaron Courville and Siva Reddy},
-  title        = {Nano Aha! Moment: Single File "RL for LLM" Library},
-  year         = {2025},
-  howpublished = {\url{https://github.com/McGill-NLP/nano-aha-moment}},
-  note         = {GitHub repository}
-}
-```
+This is a modification of the nano aha moment by Amirhossein and Milad et al, check it out here \url{https://github.com/McGill-NLP/nano-aha-moment}
