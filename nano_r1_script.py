@@ -327,6 +327,7 @@ def compute_pg_loss(
     logps = compute_token_log_probs(policy_model, model_inputs, TEMPERATURE)  # [batch_size, seq_len-1]
     labels_mask = labels_mask[..., 1:].to(logps.dtype)  # [batch_size, seq_len-1]
 
+    # KL3 calculation from http://joschu.net/blog/kl-approx.html
     ref_logratio = ref_logps - logps
     kl_penalty = torch.exp(ref_logratio) - 1 - ref_logratio  # [batch_size, seq_len-1]
     kl_penalty = kl_penalty * labels_mask  # [batch_size, seq_len-1]
@@ -436,7 +437,7 @@ def main(args, rank: int):
 
     model_name_short = MODEL_NAME.split("/")[-1]
     if args.run_id is None:
-        RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}_al{args.algorithm}"
+        RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}"
     else:
         RUN_NAME = args.run_id
 
