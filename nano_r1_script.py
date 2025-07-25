@@ -4,13 +4,13 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
 import deepspeed
 import numpy as np
 import torch
 import torch.distributed as dist
+import wandb
 from datasets import load_dataset
 from deepspeed import DeepSpeedEngine
 from deepspeed.runtime.utils import see_memory_usage
@@ -18,7 +18,6 @@ from tqdm import trange
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from vllm import LLM, CompletionOutput, RequestOutput, SamplingParams
 
-import wandb
 from utils import (
     clean_up_checkpoints,
     close_to_zero,
@@ -42,6 +41,7 @@ ch.setLevel(logging.INFO)
 formatter = logging.Formatter("[%(levelname)s|%(filename)s:%(lineno)s] %(message)s")
 ch.setFormatter(formatter)
 logger.addHandler(ch)
+
 
 # Load and process dataset
 def preprocess_example(
@@ -275,8 +275,6 @@ def create_training_episodes(
     return episodes, stats
 
 
-
-
 def compute_pg_loss(
     policy_model: Union[DeepSpeedEngine, PreTrainedModel],
     batch: Dict[str, torch.Tensor],
@@ -384,7 +382,7 @@ def main(args, rank: int):
     EPISODES_PER_ITERATION = 64
     EPISODES_PER_ITERATION_PER_RANK = EPISODES_PER_ITERATION // dist.get_world_size()
     # Number of responses to generate for each input prompt
-    GENERATIONS_PER_SAMPLE = 4
+    GENERATIONS_PER_SAMPLE = args.num_responses_per_prompt
     # Controls how much the policy can deviate from the reference model
     KL_COEFFICIENT = args.kl_coeff
 
@@ -403,8 +401,6 @@ def main(args, rank: int):
     TOP_P = 0.999  # to avoid sampling unused tokens absent from tokenizer see https://github.com/vllm-project/vllm/issues/13175#issuecomment-2781842571
     # Top-k sampling parameter (-1 = disabled)
     TOP_K = -1  # no top k
-    # Number of MC samples to take for each response
-    RESPONSES_PER_PROMPT = args.num_responses_per_prompt
     # DeepSpeed configuration
     deepspeed_config = {
         "bf16": {"enabled": True},
@@ -565,9 +561,7 @@ def main(args, rank: int):
             project="nano-aha-moment",
             name=RUN_NAME,
             resume="allow",
-            config={
-                
-            },
+            config={},
         )
 
     sampler_rng = np.random.default_rng(seed=42)
@@ -840,10 +834,25 @@ if __name__ == "__main__":
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
     arg_parser.add_argument("--debug", action="store_true", help="Debug mode")
-    arg_parser.add_argument("--num_responses_per_prompt", type=int, default=8, help="Number of MC samples to take for each response")
+    arg_parser.add_argument(
+        "--num_responses_per_prompt",
+        type=int,
+        default=8,
+        help="Number of MC samples to take for each response",
+    )
     arg_parser.add_argument("--run_id", type=str, default=None, help="Run ID")
-    arg_parser.add_argument("--output_dir", type=str, default="output", help="Directory to output checkpoints etc")
-    arg_parser.add_argument("--nproc", type=int, default=1, help="Number of processes (data parallelism) to use")
+    arg_parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="output",
+        help="Directory to output checkpoints etc",
+    )
+    arg_parser.add_argument(
+        "--nproc",
+        type=int,
+        default=1,
+        help="Number of processes (data parallelism) to use",
+    )
 
     args = arg_parser.parse_args()
 
