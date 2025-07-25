@@ -789,7 +789,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--seed", type=int, default=42, help="A number that initializes our ")
     arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
     arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
-    arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B-base", help="Model name/path")
+    arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B-base", help="Model name/path")
     arg_parser.add_argument("--per_device_batch_size", type=int, default=16, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
