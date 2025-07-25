@@ -52,7 +52,7 @@ def preprocess_example(
     numbers: List[int] = example["nums"]
     target: int = example["target"]
     prompt = PROMPT_TEMPLATE.format(numbers=numbers, target=target)
-    input_ids = tokenizer(prompt, tokenize=True)["input_ids"]
+    input_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
     return {"prompt": prompt, "input_ids": input_ids}
 
 
@@ -74,23 +74,18 @@ def format_reward_func(completion: str, EOS_TOKEN: str) -> float:
     allowed_pattern = r"^[\d+\-*/().\s]+$"
 
     try:
-        # Since <think> was part of our prompt, we add it to the completion so we get <think>...</think>
-        completion = "<think>" + completion
-
         # Check if the format is correct
         # Pattern means:
-        # 1) <think>...contents not including other <think> tags...</think>
-        # 2) \n
         # 3) <answer>...anything...</answer>
-        regex = r"^<think>([^<]*(?:<(?!/?think>)[^<]*)*)<\/think>\n<answer>([\s\S]*?)<\/answer>"
+        regex = r"^<answer>([\s\S]*?)<\/answer>"
         match = re.search(regex, completion, re.DOTALL)
 
-        if match is None or len(match.groups()) != 2:
+        if match is None or len(match.groups()) != 1:
             # Format is incorrect
             return 0.0
         else:
             # Extract the content inside <answer>...</answer>
-            answer_content = match.group(2).strip()
+            answer_content = match.group(1).strip()
 
             # Check if answer content matches the allowed pattern
             if not re.match(allowed_pattern, answer_content):
@@ -117,8 +112,6 @@ def equation_reward_func(completion: str, nums: List[int], target: int) -> float
         float: Reward score
     """
     try:
-        # add synthetic <think> as its already part of the prompt and prefilled for the assistant to more easily match the regex
-        completion = "<think>" + completion
         # Check if the format is correct
         match = re.search(r"<answer>(.*?)<\/answer>", completion)
         if match is None:
@@ -152,7 +145,8 @@ def compute_reward(completion: str, sample: Dict[str, Any], EOS_TOKEN: str) -> T
     nums = sample["nums"]
     target = sample["target"]
 
-    format_reward = format_reward_func(completion, EOS_TOKEN)
+    # format_reward = format_reward_func(completion, EOS_TOKEN)
+    format_reward = 0
     equation_reward = equation_reward_func(completion=completion, nums=nums, target=target)
 
     reward = format_reward + equation_reward
