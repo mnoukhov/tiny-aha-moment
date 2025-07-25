@@ -249,7 +249,7 @@ def evaluate_on_test_set(
         >>> print(f"Average reward: {episodes_stats['rewards']:.3f}")
     """
     generations = inference_engine.generate(
-        prompt_input_ids=test_dataset["input_ids"], sampling_params=eval_sampling_params
+        prompt_token_ids=test_dataset["input_ids"], sampling_params=eval_sampling_params
     )
 
     metrics = {

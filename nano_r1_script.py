@@ -613,7 +613,7 @@ def main(args):
 
         # Sample responses
         outputs = inference_engine.generate(
-            prompt_input_ids=samples["input_ids"],
+            prompt_token_ids=samples["input_ids"],
             sampling_params=train_sampling_params,
         )
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
@@ -811,7 +811,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
     arg_parser.add_argument("--eval_every", type=int, default=10, help="Do an eval every n steps")
     arg_parser.add_argument(
-        "--total_episodes", type=int, default=12800, help="Total number of prompt-completions to generate per update"
+        "--total_episodes", type=int, default=6400, help="Total number of prompt-completions to generate per update"
     )
     arg_parser.add_argument(
         "--episodes_per_step", type=int, default=128, help="Total number of prompt-completions to generate per update"
