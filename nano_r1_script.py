@@ -11,6 +11,7 @@ import deepspeed
 import numpy as np
 import torch
 import wandb
+import torch.distributed as dist
 from datasets import load_dataset
 from deepspeed import DeepSpeedEngine
 from tqdm import trange
@@ -778,6 +779,8 @@ def main(args):
             keep_every_n_steps=50,
             exclude=[ckpt_dir],
         )
+
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

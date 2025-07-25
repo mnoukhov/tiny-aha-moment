@@ -20,7 +20,9 @@ and follow the instructions
 
 Jiayi Pan made a little repro of Deepseek R1's "aha moment" see the tweets \url{https://x.com/jiayi_pirate/status/1882839370505621655}
 
-For speed, we're using a smaller model that has better mid-training (Qwen3-0.6B-base vs Qwen2.5 used by Jiayi).
+For speed, we're using a smaller model that has better mid-training (Qwen3-1.7B-base vs Qwen2.5 used by Jiayi).
+
+We're going to train for 50 steps on the Countdown game and see what happens. With a 1.7B model this will take about 18 minutes.
 
 The major thing is we're looking for our model to learn the format of our `<answer> </answer>` format and learn to use reasoning, backtracking, verification and all those great skills!
 
@@ -29,6 +31,16 @@ Look at the scores, the format correctness, how the response length changes.
 Look at the specific questions and responses in the `episodes` in wandb.
 
 Look at the `train/loss`. What's going on?
+
+GRPO's reward depends on there being differences between different generations. Look at `train/zero_advantages_ratio` to find out how frequently all the completions get the same score (usually a bad score!)
+
+## Let's take an existing model
+
+What about a model that has already been post-trained? How well can it learn this particular task and what happens?
+
+Change to `--model_name Qwen/Qwen-0.6B` which is a smaller but post-trained model and run it
+
+RL can be pretty unstable. What happens if we increase the learning rate? Decrease the KL coefficient (that keeps the model close to initialization) ?
 
 ## Let's look at some issues with GRPO?
 
