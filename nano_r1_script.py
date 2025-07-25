@@ -231,6 +231,7 @@ def create_training_episodes(
         rewards, reward_metrics = zip(*rewards_and_metrics)
 
         rewards = np.array(rewards)
+        # GRPO: subtract the group mean reward and divide by std deviation
         advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-4)
 
         per_token_advantages = [[adv] * len(resp) for adv, resp in zip(advantages, response_token_ids)]
@@ -316,10 +317,11 @@ def compute_pg_loss(
         entropy = -logps.sum() / labels_mask.sum()  # scalar
         zero_advantages = close_to_zero(advantages[..., 1:], labels_mask)  # scalar
 
-    policy_loss = -logps * advantages[..., 1:]  # [batch_size, seq_len-1]
-    policy_loss = policy_loss * labels_mask  # [batch_size, seq_len-1]
+    policy_loss = -logps * advantages[..., 1:]
+    policy_loss = policy_loss * labels_mask
 
-    loss = (policy_loss + KL_COEFFICIENT * kl_penalty).sum() / total_response_len  # scalar
+    # GRPO: divide the loss by the length of the responses
+    loss = (policy_loss + KL_COEFFICIENT * kl_penalty).sum() / total_response_len
 
     metrics = {
         "policy_loss": policy_loss.sum().item() / total_response_len.item(),
@@ -805,7 +807,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--seed", type=int, default=42, help="A number that initializes our ")
     arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
     arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
-    arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B", help="Model name/path")
+    arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B-base", help="Model name/path")
     arg_parser.add_argument("--per_device_batch_size", type=int, default=16, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")

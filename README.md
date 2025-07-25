@@ -39,6 +39,8 @@ We've got three things to check out
 2. Does the length normalization make our wrong answers much longer than our right answer? What happens if we remove it?
 3. What effect does dividing by the standard deviation of our group do?
 
+For the second two, look for the comment `# GRPO` to find the corresponding code
+
 ## Further exploration
 
 What happens if we use a weaker model for our experiments? `Qwen/Qwen2.5-0.5B-base` is the old version of Qwen. Can it learn to play Countdown?
