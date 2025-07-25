@@ -26,7 +26,6 @@ from utils import (
     dump_episodes,
     evaluate_on_test_set,
     find_last_checkpoint,
-    initialize_training_process_group,
     load_model_into_vllm,
     prepare_model_inputs,
 )
@@ -346,24 +345,8 @@ def compute_pg_loss(
     return loss, metrics
 
 
-def main(args, rank: int):
-    # rank = int(os.environ.get("RANK", "0"))
-    nproc = int(os.environ.get("WORLD_SIZE", "1"))
-    nproc = args.nproc
-    initialize_training_process_group(rank, nproc)
+def main(args):
     curr_cuda_device = torch.device("cuda")
-
-    # Disable logging for non-main processes to avoid duplicate logs
-    if dist.get_rank() != 0:
-        logger.setLevel(logging.ERROR)
-
-    if args.debug and nproc == 1:
-        import debugpy
-
-        debugpy.listen(5678)
-        logger.info("Waiting for debugger to attach...")
-        debugpy.wait_for_client()
-        logger.info("Debugger attached")
 
     ############################################
     # Hyperparameters
@@ -376,8 +359,7 @@ def main(args, rank: int):
     # Total number of training iterations
     NUM_ITERATIONS = 1000
     # Number of episodes to collect per iteration for training
-    EPISODES_PER_ITERATION = 64
-    EPISODES_PER_ITERATION_PER_RANK = EPISODES_PER_ITERATION // dist.get_world_size()
+    EPISODES_PER_ITERATION = args.episodes_per_step
     # Number of responses to generate for each input prompt
     GENERATIONS_PER_SAMPLE = args.num_responses_per_prompt
     # Controls how much the policy can deviate from the reference model
@@ -404,7 +386,7 @@ def main(args, rank: int):
         "zero_optimization": {"stage": 2, "overlap_comm": False},
         "train_batch_size": EPISODES_PER_ITERATION,
         "train_micro_batch_size_per_gpu": PER_DEVICE_BATCH_SIZE,
-        "gradient_accumulation_steps": EPISODES_PER_ITERATION_PER_RANK // PER_DEVICE_BATCH_SIZE,
+        "gradient_accumulation_steps": EPISODES_PER_ITERATION // PER_DEVICE_BATCH_SIZE,
         "gradient_clipping": 1.0,
         "optimizer": {
             "type": "AdamW",
@@ -423,7 +405,7 @@ def main(args, rank: int):
         # No effect
         "train_batch_size": EPISODES_PER_ITERATION,
         "train_micro_batch_size_per_gpu": PER_DEVICE_BATCH_SIZE,
-        "gradient_accumulation_steps": EPISODES_PER_ITERATION_PER_RANK // PER_DEVICE_BATCH_SIZE,
+        "gradient_accumulation_steps": EPISODES_PER_ITERATION // PER_DEVICE_BATCH_SIZE,
     }
 
     dist.barrier(device_ids=[torch.cuda.current_device()])
@@ -539,7 +521,7 @@ def main(args, rank: int):
     inference_engine = LLM(
         model=MODEL_NAME,
         skip_tokenizer_init=False,
-        gpu_memory_utilization=0.3,
+        gpu_memory_utilization=0.4,
         enable_prefix_caching=True,
         swap_space=4,
         scheduling_policy="fcfs",
@@ -562,7 +544,7 @@ def main(args, rank: int):
         )
 
     sampler_rng = np.random.default_rng(seed=42)
-    NUM_SAMPLES_PER_ITERATION = EPISODES_PER_ITERATION_PER_RANK // GENERATIONS_PER_SAMPLE
+    NUM_SAMPLES_PER_ITERATION = EPISODES_PER_ITERATION // GENERATIONS_PER_SAMPLE
 
     # Load checkpoint if it exists
     begin_iter = 0
@@ -696,7 +678,7 @@ def main(args, rank: int):
             ref_log_probs = []
             for i in trange(
                 0,
-                EPISODES_PER_ITERATION_PER_RANK,
+                EPISODES_PER_ITERATION,
                 PER_DEVICE_BATCH_SIZE,
                 desc="Computing reference logprobs",
                 disable=dist.get_rank() != 0,
@@ -727,7 +709,7 @@ def main(args, rank: int):
 
         for i in trange(
             0,
-            EPISODES_PER_ITERATION_PER_RANK,
+            EPISODES_PER_ITERATION,
             PER_DEVICE_BATCH_SIZE,
             desc="Gradient Accumulation",
             disable=dist.get_rank() != 0,
@@ -833,12 +815,14 @@ if __name__ == "__main__":
     arg_parser.add_argument("--per_device_batch_size", type=int, default=1, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
-    arg_parser.add_argument("--debug", action="store_true", help="Debug mode")
+    arg_parser.add_argument(
+        "--episodes_per_step", type=int, default=256, help="Total number of prompt-completions to generate per update"
+    )
     arg_parser.add_argument(
         "--num_responses_per_prompt",
         type=int,
         default=8,
-        help="Number of MC samples to take for each response",
+        help="Number of completions to generate for each prompt, that becomes the size of the GRPO group",
     )
     arg_parser.add_argument("--run_id", type=str, default=None, help="Run ID")
     arg_parser.add_argument(
@@ -847,20 +831,6 @@ if __name__ == "__main__":
         default="output",
         help="Directory to output checkpoints etc",
     )
-    arg_parser.add_argument(
-        "--nproc",
-        type=int,
-        default=1,
-        help="Number of processes (data parallelism) to use",
-    )
-
     args = arg_parser.parse_args()
 
-    n_gpus = torch.cuda.device_count()
-    if args.nproc > n_gpus:
-        raise ValueError(f"Requested {args.nproc} processes, but only {n_gpus} GPUs are available.")
-
-    if args.nproc == 1:
-        main(args, rank=0)
-    else:
-        torch.multiprocessing.spawn(args, main, nprocs=args.nproc)
+    main(args)
