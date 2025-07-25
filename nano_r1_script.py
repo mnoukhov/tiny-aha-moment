@@ -500,7 +500,7 @@ def main(args):
         scheduling_policy="fcfs",
         dtype=torch.bfloat16,
         max_model_len=MAX_RESPONSE_TOKENS + 1024,
-        enable_sleep_mode=True,
+        # enable_sleep_mode=True,
         device=f"cuda:{torch.cuda.current_device()}",
         tensor_parallel_size=1,
     )
@@ -533,6 +533,7 @@ def main(args):
 
     for iteration in trange(begin_iter, NUM_ITERATIONS):
         logger.info(f"Iteration {iteration}/{NUM_ITERATIONS}")
+        start_time = time.time()
 
         metrics = {}
 
@@ -610,10 +611,10 @@ def main(args):
             GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
         )
 
-        inference_engine.sleep(1)
-        gc.collect()
-        torch.cuda.empty_cache()
-        time.sleep(1)
+        # inference_engine.sleep(1)
+        # gc.collect()
+        # torch.cuda.empty_cache()
+        # time.sleep(1)
 
         for k, v in episodes_stats.items():
             metrics.setdefault(k, []).extend(v)
@@ -718,9 +719,9 @@ def main(args):
 
         gc.collect()
         torch.cuda.empty_cache()
-        time.sleep(1)
+        # time.sleep(1)
 
-        inference_engine.wake_up()
+        # inference_engine.wake_up()
         load_model_into_vllm(policy_model, inference_engine)
 
         #########################################################
@@ -751,6 +752,7 @@ def main(args):
         ]
         selected_metrics = {k: float(logs[k]) for k in selected_keys if k in logs}
         logger.info(f"KEY METRICS: {selected_metrics}")
+        logger.info(f"Total per iteration {time.time() - start_time} seconds")
 
     if args.do_save:
         ckpt_dir = EXP_DIR / "checkpoints" / f"ckpt_{iteration:06d}"
