@@ -517,7 +517,7 @@ def main(args):
 
     # Wandb for logging. Only rank 0 will initialize wandb
     wandb.init(
-        project="nano-aha-moment",
+        project="countdown-grpo",
         name=RUN_NAME,
         resume="allow",
         config=vars(args),
