@@ -429,8 +429,8 @@ def main(args):
     PROMPT_TEMPLATE = (
         "Combine a couple numbers in a simple algebraic equation so that it equals a target number. "
         "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
-        "Think about the reasoning process then return the final equation inside <answer> </answer> tags. "
-        "Do not include the = target inside the <answer> </answer> tags and only use each number once."
+        "Think about the reasoning process then return the final equation without = inside <answer> </answer> tags. "
+        "The equation can only use each number once."
         "For example after thinking step by step (5 + 2) - 3 = 4 therefore <answer>(5 + 2) - 3</answer>.\n\n"
         "Use the number {numbers} to create an equation that equals {target}.\n\n"
         "Let's solve this step by step."
@@ -790,7 +790,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
     arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
     arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B-base", help="Model name/path")
-    arg_parser.add_argument("--per_device_batch_size", type=int, default=8, help="Per device batch size")
+    arg_parser.add_argument("--per_device_batch_size", type=int, default=16, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=5e-7, help="Learning rate for training")
     arg_parser.add_argument("--num_evals", type=int, default=5, help="How many evals to do over the training")
