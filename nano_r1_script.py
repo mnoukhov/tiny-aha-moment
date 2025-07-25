@@ -24,6 +24,7 @@ from utils import (
     dump_episodes,
     evaluate_on_test_set,
     find_last_checkpoint,
+    initialize_training_process_group,
     load_model_into_vllm,
     prepare_model_inputs,
 )
@@ -331,6 +332,7 @@ def compute_pg_loss(
 
 
 def main(args):
+    initialize_training_process_group(0, 1)
     # ignore
     curr_cuda_device = torch.device("cuda")
 
@@ -369,7 +371,7 @@ def main(args):
     # DeepSpeed configuration
     deepspeed_config = {
         "bf16": {"enabled": True},
-        "zero_optimization": {"stage": 2, "overlap_comm": False},
+        "zero_optimization": {"stage": 2},
         "train_batch_size": EPISODES_PER_ITERATION,
         "train_micro_batch_size_per_gpu": PER_DEVICE_BATCH_SIZE,
         "gradient_accumulation_steps": EPISODES_PER_ITERATION // PER_DEVICE_BATCH_SIZE,
