@@ -56,7 +56,7 @@ def preprocess_example(
     return {"prompt": prompt, "input_ids": input_ids}
 
 
-def format_reward_func(completion: str, EOS_TOKEN: str) -> float:
+def format_correct_func(completion: str, EOS_TOKEN: str) -> float:
     """
     Format: Reasoning process <answer> answer here <answer>
 
@@ -145,13 +145,13 @@ def compute_reward(completion: str, sample: Dict[str, Any], EOS_TOKEN: str) -> T
     nums = sample["nums"]
     target = sample["target"]
 
-    format_reward = format_reward_func(completion, EOS_TOKEN)
+    format_correct = format_correct_func(completion, EOS_TOKEN)
     equation_reward = equation_reward_func(completion=completion, nums=nums, target=target)
 
     reward = equation_reward
 
     metrics = {
-        "format_reward": format_reward,
+        "format_correct": format_correct,
         "equation_reward": equation_reward,
     }
 
@@ -764,12 +764,12 @@ def main(args):
             selected_keys = [
                 "train/kl_penalty",
                 "train/rewards",
-                "train/reward_metrics/format_reward",
+                "train/reward_metrics/format_correct",
                 "train/reward_metrics/equation_reward",
                 "train/pass_at_group",
                 "train/response_lengths",
                 "eval/rewards",
-                "eval/reward_metrics/format_reward",
+                "eval/reward_metrics/format_correct",
                 "eval/reward_metrics/equation_reward",
             ]
             selected_metrics = {k: float(logs[k]) for k in selected_keys if k in logs}
