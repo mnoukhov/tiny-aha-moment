@@ -113,7 +113,7 @@ def equation_reward_func(completion: str, nums: List[int], target: int) -> float
     """
     try:
         # Check if the format is correct
-        match = re.search(r"<answer>(.*?)<\/answer>", completion)
+        match = re.search(r"<answer>([\s.]*?)<\/answer>", completion)
         if match is None:
             return 0.0
         # Extract the "answer" part from the completion
@@ -495,7 +495,7 @@ def main(args):
         config=ref_deepspeed_config,
     )
 
-    reference_model.module.cpu()
+    # reference_model.module.cpu()
     dist.barrier(device_ids=[torch.cuda.current_device()])
 
     ############################################
@@ -661,9 +661,9 @@ def main(args):
             device=curr_cuda_device,
         )
 
-        logger.info("Moving reference model to GPU")
-        reference_model.module.to(curr_cuda_device)
-        reference_model.eval()
+        # logger.info("Moving reference model to GPU")
+        # reference_model.module.to(curr_cuda_device)
+        # reference_model.eval()
 
         with torch.no_grad():
             ref_log_probs = []
@@ -687,11 +687,11 @@ def main(args):
             del ref_log_probs
 
         # Free memory taken by reference model
-        logger.info("Moving reference model back to CPU")
-        reference_model.cpu()
-        gc.collect()
-        torch.cuda.empty_cache()
-        time.sleep(1)
+        # logger.info("Moving reference model back to CPU")
+        # reference_model.cpu()
+        # gc.collect()
+        # torch.cuda.empty_cache()
+        # time.sleep(1)
 
         # Calculate losses and update model
         policy_model.train()
