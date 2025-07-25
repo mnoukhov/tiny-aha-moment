@@ -16,7 +16,7 @@ from deepspeed import DeepSpeedEngine
 from deepspeed.runtime.utils import see_memory_usage
 from tqdm import trange
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
-from vllm import LLM, CompletionOutput, RequestOutput, SamplingParams
+from vllm import LLM, SamplingParams
 
 from utils import (
     clean_up_checkpoints,
@@ -25,7 +25,6 @@ from utils import (
     dump_episodes,
     evaluate_on_test_set,
     find_last_checkpoint,
-    fix_oov_logits_processor,
     initialize_training_process_group,
     load_model_into_vllm,
     prepare_model_inputs,
@@ -438,7 +437,7 @@ def main(args, rank: int):
         RUN_NAME = args.run_id
 
     EXP_DIR = args.output_dir
-    EXP_DIR.mkdir(parents=True, exist_ok=True)
+    os.makedirs(EXP_DIR)
 
     logger.info(f"Logs and Checkpoints will be saved to: {EXP_DIR}")
 
