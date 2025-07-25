@@ -613,7 +613,7 @@ def main(args):
 
         # Sample responses
         outputs = inference_engine.generate(
-            prompts=samples["input_ids"],
+            prompt_input_ids=samples["input_ids"],
             sampling_params=train_sampling_params,
         )
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
@@ -686,6 +686,7 @@ def main(args):
             model_inputs["ref_log_probs"] = ref_log_probs
             del ref_log_probs
 
+        # This is old code that frees up more space if you're running 3B models
         # Free memory taken by reference model
         # logger.info("Moving reference model back to CPU")
         # reference_model.cpu()
@@ -805,7 +806,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
     arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
     arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B", help="Model name/path")
-    arg_parser.add_argument("--per_device_batch_size", type=int, default=1, help="Per device batch size")
+    arg_parser.add_argument("--per_device_batch_size", type=int, default=16, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
     arg_parser.add_argument("--eval_every", type=int, default=10, help="Do an eval every n steps")
@@ -813,7 +814,7 @@ if __name__ == "__main__":
         "--total_episodes", type=int, default=12800, help="Total number of prompt-completions to generate per update"
     )
     arg_parser.add_argument(
-        "--episodes_per_step", type=int, default=256, help="Total number of prompt-completions to generate per update"
+        "--episodes_per_step", type=int, default=128, help="Total number of prompt-completions to generate per update"
     )
     arg_parser.add_argument(
         "--num_responses_per_prompt",

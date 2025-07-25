@@ -44,7 +44,7 @@ We've got three things to check out
 What happens if we use a weaker model for our experiments? `Qwen/Qwen2.5-0.5B-base` is the old version of Qwen. Can it learn to play Countdown?
 
 Can we figure out how good our model *will* be after training before training? One thing to look at is whether it *can* answer questions at all.
-To do this, we can look at the `train/pass_at_group` metric that tracks whether there was at least 1 answer in our group of `num_responses_per_prompt` that got it right.
+To do this, we can look at the `train/pass_at_group` metric that tracks whether there was at least 1 answer in our group of `num_responses_per_prompt` that got it right. Can we increase the number of `num_responses_per_prompt` to try and get more signal?
 
 Let's try other models like a bigger / better version of 2.5 `Qwen/Qwen2.5-1.5B-base`. If that model doesn't work, let's take a model that has been SFTed on correct reasoning traces for countdown but with a slightly different template `CohenQu/Qwen2.5-1.5B_Countdown-v1`. What if we change the `PROMPT_TEMPLATE` to match it exactly?
 
