@@ -501,7 +501,7 @@ def main(args):
         scheduling_policy="fcfs",
         dtype=torch.bfloat16,
         max_model_len=MAX_RESPONSE_TOKENS + 1024,
-        # enable_sleep_mode=True,
+        enable_sleep_mode=True,
         device=f"cuda:{torch.cuda.current_device()}",
         tensor_parallel_size=1,
     )
@@ -612,10 +612,10 @@ def main(args):
             GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
         )
 
-        # inference_engine.sleep(1)
-        # gc.collect()
-        # torch.cuda.empty_cache()
-        # time.sleep(1)
+        inference_engine.sleep(1)
+        gc.collect()
+        torch.cuda.empty_cache()
+        time.sleep(1)
 
         for k, v in episodes_stats.items():
             metrics.setdefault(k, []).extend(v)
@@ -670,8 +670,8 @@ def main(args):
         # Free memory taken by reference model
         # logger.info("Moving reference model back to CPU")
         # reference_model.cpu()
-        # gc.collect()
-        # torch.cuda.empty_cache()
+        gc.collect()
+        torch.cuda.empty_cache()
         # time.sleep(1)
 
         # Calculate losses and update model
@@ -722,7 +722,7 @@ def main(args):
         torch.cuda.empty_cache()
         # time.sleep(1)
 
-        # inference_engine.wake_up()
+        inference_engine.wake_up()
         load_model_into_vllm(policy_model, inference_engine)
 
         #########################################################
