@@ -113,7 +113,7 @@ def equation_reward_func(completion: str, nums: List[int], target: int) -> float
     """
     try:
         # Check if the format is correct
-        match = re.search(r"<answer>([\s.]*?)<\/answer>", completion)
+        match = re.search(r"<answer>(.*?)<\/answer>", completion, re.DOTALL)
         if match is None:
             return 0.0
         # Extract the "answer" part from the completion
