@@ -43,20 +43,6 @@ formatter = logging.Formatter("[%(levelname)s|%(filename)s:%(lineno)s] %(message
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
-arg_parser = argparse.ArgumentParser(description="Train R1 model with PPO")
-arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for PPO")
-arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
-arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-3B", help="Model name/path")
-arg_parser.add_argument("--per_device_batch_size", type=int, default=8, help="Per device batch size")
-arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
-arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
-arg_parser.add_argument("--debug", action="store_true", help="Debug mode")
-arg_parser.add_argument("--algorithm", type=str, choices=["grpo", "vineppo"], default="grpo", help="Algorithm to use")
-arg_parser.add_argument("--vineppo_k", type=int, default=3, help="Number of MC samples to take for each response")
-arg_parser.add_argument("--run_id", type=str, default=None, help="Run ID")
-arg_parser.add_argument("--nproc", type=int, default=1, help="Number of processes (data parallelism) to use")
-
-
 # Load and process dataset
 def preprocess_example(
     example: Dict[str, Any],
@@ -194,7 +180,6 @@ def compute_reward(completion: str, sample: Dict[str, Any], EOS_TOKEN: str) -> T
 
 
 def create_training_episodes(
-    *,
     samples: List[Dict[str, Any]] = None,
     all_generations: List[List[int]] = None,
     all_finish_reasons: List[str] = None,
@@ -290,278 +275,6 @@ def create_training_episodes(
     return episodes, stats
 
 
-def create_vineppo_training_episodes(
-    *,
-    inference_engine: LLM = None,
-    samples: List[Dict[str, Any]] = None,
-    all_generations: List[List[int]] = None,
-    all_finish_reasons: List[str] = None,
-    tokenizer: AutoTokenizer = None,
-    EOS_TOKEN_ID: int = None,
-    EOS_TOKEN: str = None,
-    GENERATIONS_PER_SAMPLE: int = None,
-    MAX_RESPONSE_TOKENS: int = None,
-    VINEPPO_K: int = None,
-    TEMPERATURE: float = None,
-    TOP_P: float = None,
-    TOP_K: int = None,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """
-    *** EXPERIMENTAL ***
-    Process model generations and calculate rewards for VinePPO training episodes.
-
-    This function implements the VinePPO algorithm,
-    which uses Monte Carlo rollouts to estimate state values and compute token-level advantages.
-    See: https://arxiv.org/abs/2410.01679
-
-    Note that it only differs from GRPO in the way it computes advantages. So the rest of the code stays the same.
-
-    The algorithm works as follows:
-    1. Split each response into intermediate states (every 100 tokens)
-    2. For each intermediate state, generate VINEPPO_K Monte Carlo rollouts
-    3. Estimate state values by averaging rewards from these rollouts
-    4. Compute token-level advantages based on value differences between states
-
-    Args:
-        samples: List of input samples, each containing:
-            - input_ids: List[int], tokenized input prompt
-            - nums: List[int], numbers to use in equation
-            - target: int, target value for equation
-        all_generations: List of token ID sequences for each generated response
-        all_finish_reasons: List of finish reasons for each generation ("stop" or other)
-
-    Returns:
-        Tuple containing:
-        1. Dictionary with processed data for training:
-            - all_query_token_ids: List[List[int]], input token IDs repeated for each generation
-            - all_response_token_ids: List[List[int]], response token IDs with EOS tokens added
-            - all_advantages: List[List[float]], advantage values repeated for each token
-        2. Dictionary with generation statistics:
-            - response_lengths: List[int], lengths of generated responses
-            - rewards: List[float], raw reward values
-            - non_stop_rate: List[bool], whether each generation ended naturally
-            - reward_metrics/*: Various reward component metrics
-    """
-
-    def split_response(response_token_ids: List[int]) -> List[int]:
-        last_index = len(response_token_ids)
-        step_boundaries = [0]
-        cursor = 0
-        while cursor < last_index:
-            cursor += 100
-            if cursor >= last_index:
-                break
-            step_boundaries.append(cursor)
-
-        return step_boundaries
-
-    def estimate_values_by_mc_rollouts(episodes_raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        def get_response_prefixes(
-            response_token_ids: List[int], states_for_value_estimation: List[int]
-        ) -> List[List[int]]:
-            prefixes = []
-            for state in states_for_value_estimation:
-                prefixes.append(response_token_ids[:state])
-            return prefixes
-
-        def get_mc_queries(
-            query_token_ids: List[int], response_prefixes_token_ids: List[List[int]]
-        ) -> Tuple[List[List[int]], List[int]]:
-            prefix_queries_token_ids = []
-            max_tokens = []
-            for token_ids in response_prefixes_token_ids:
-                prefix_queries_token_ids.append(query_token_ids + token_ids)
-                max_tokens.append(MAX_RESPONSE_TOKENS - len(token_ids))  # this is how many response tokens are left.
-            return prefix_queries_token_ids, max_tokens
-
-        def get_value_estimates(
-            sample: Dict[str, Any], response_prefixes: List[List[int]], mcs_token_ids: List[List[int]]
-        ) -> List[float]:
-            values_estimates = []
-            for prefix, mcs in zip(response_prefixes, mcs_token_ids):
-                values = []
-                for mc in mcs:
-                    full_text = tokenizer.decode(prefix + mc, skip_special_tokens=False)
-                    score, _ = compute_reward(full_text, sample, EOS_TOKEN)
-                    values.append(score)
-                values_estimates.append(sum(values) / len(values))
-            return values_estimates
-
-        def update_state_values(
-            old_states: List[int],
-            old_value_estimates: List[float],
-            new_states: List[int],
-            new_value_estimates: List[float],
-        ) -> Tuple[List[int], List[float]]:
-            values = {}
-            for state, value_estimate in zip(old_states, old_value_estimates):
-                values[state] = value_estimate
-            for state, value_estimate in zip(new_states, new_value_estimates):
-                assert state not in values
-                values[state] = value_estimate
-            sorted_states = sorted(values.keys())
-            sorted_values = [values[state] for state in sorted_states]
-            return sorted_states, sorted_values
-
-        def extract_token_ids(vllm_outputs: List[CompletionOutput]) -> List[List[int]]:
-            return [list(out.token_ids) for out in vllm_outputs]
-
-        for eps in episodes_raw:
-            eps["value_estimates"] = [eps["reward"]]
-            eps["states"] = [len(eps["response_token_ids"])]
-            eps["new_states"] = split_response(eps["response_token_ids"])
-
-            # Get prefixes of from chunks of the response
-            # i.e. for response [A, B, C, D, E] with new_states [0, 2, 4]
-            # we get prefixes [[]], [A, B], [A, B, C, D]
-            eps["mc_response_prefixes_token_ids"] = get_response_prefixes(eps["response_token_ids"], eps["new_states"])
-
-            # Get MC queries where we just add the query to each prefix
-            eps["mc_queries_token_ids"], eps["mc_queries_max_tokens"] = get_mc_queries(
-                eps["query_token_ids"], eps["mc_response_prefixes_token_ids"]
-            )
-
-        # Flatten the MC queries to a single list which will be used for inference
-        flatten_mc_queries = []
-        flatten_mc_queries_max_tokens = []
-        queries_count = []
-        for eps in episodes_raw:
-            flatten_mc_queries.extend(eps["mc_queries_token_ids"])
-            flatten_mc_queries_max_tokens.extend(eps["mc_queries_max_tokens"])
-            queries_count.append(len(eps["mc_queries_token_ids"]))
-
-        # Auxiliary rollouts to get the value estimates
-        logger.info("Monte-Carlo value estimation...")
-        mc_outputs: List[RequestOutput] = inference_engine.generate(
-            prompt_token_ids=flatten_mc_queries,
-            sampling_params=[
-                SamplingParams(
-                    n=VINEPPO_K,
-                    temperature=TEMPERATURE,
-                    top_p=TOP_P,
-                    top_k=TOP_K,
-                    max_tokens=max_tokens,
-                    detokenize=False,
-                    stop_token_ids=[EOS_TOKEN_ID],
-                )
-                for max_tokens in flatten_mc_queries_max_tokens
-            ],
-        )
-
-        # Unflatten the MC rollouts
-        # [
-        #   // Episode 1
-        #   [
-        #     [tok1, tok2, ...],
-        #     [tok1, tok2, ...],
-        #     ...
-        #   ],
-        #   ...
-        # ]
-        unflattened_mc_token_ids: List[List[List[int]]] = []
-        start = 0
-        for count in queries_count:
-            output_slice = mc_outputs[start : start + count]
-            unflattened_mc_token_ids.append([extract_token_ids(out.outputs) for out in output_slice])
-            start += count
-
-        assert len(unflattened_mc_token_ids) == len(episodes_raw)
-
-        # Compute the value estimates based on avg. MC returns
-        for i, eps in enumerate(episodes_raw):
-            mc_token_ids = unflattened_mc_token_ids[i]
-            mc_value_estimates = get_value_estimates(
-                sample=eps["sample"],
-                response_prefixes=eps["mc_response_prefixes_token_ids"],
-                mcs_token_ids=mc_token_ids,
-            )
-            eps["states"], eps["value_estimates"] = update_state_values(
-                old_states=eps["states"],
-                old_value_estimates=eps["value_estimates"],
-                new_states=eps["new_states"],
-                new_value_estimates=mc_value_estimates,
-            )
-
-        # Remove unnecessary keys
-        for i, eps in enumerate(episodes_raw):
-            eps.pop("new_states")
-            eps.pop("mc_response_prefixes_token_ids")
-            eps.pop("mc_queries_token_ids")
-            eps.pop("mc_queries_max_tokens")
-
-        return episodes_raw
-
-    def get_tokens_advantages(states: List[int], value_estimates: List[float]) -> List[float]:
-        tokens_advantages = []
-        assert sorted(states) == states
-        for i in range(len(states) - 1):
-            length = states[i + 1] - states[i]
-            advantage = value_estimates[i + 1] - value_estimates[i]
-            tokens_advantages.extend([advantage] * length)
-        return tokens_advantages
-
-    assert len(all_generations) == len(all_finish_reasons)
-    assert len(all_generations) == len(samples) * GENERATIONS_PER_SAMPLE
-
-    # Process responses and calculate rewards
-    groups = [
-        list(range(i, i + GENERATIONS_PER_SAMPLE)) for i in range(0, len(all_generations), GENERATIONS_PER_SAMPLE)
-    ]  # example: [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
-
-    all_query_token_ids, all_responses_token_ids, all_samples, all_rewards = [], [], [], []
-
-    stats = {
-        "response_lengths": [],
-        "rewards": [],
-        "non_stop_rate": [],
-    }
-
-    for sample, group_indices in zip(samples, groups):
-        finish_reasons = [all_finish_reasons[i] for i in group_indices]
-        response_token_ids = [all_generations[i] for i in group_indices]
-        responses = tokenizer.batch_decode(response_token_ids, skip_special_tokens=False)
-
-        rewards_and_metrics = [compute_reward(resp, sample, EOS_TOKEN) for resp in responses]
-        rewards, reward_metrics = zip(*rewards_and_metrics)
-
-        all_rewards.extend(rewards)
-        all_samples.extend([sample] * GENERATIONS_PER_SAMPLE)
-        all_query_token_ids.extend([sample["input_ids"]] * GENERATIONS_PER_SAMPLE)
-        all_responses_token_ids.extend(response_token_ids)
-
-        stats["rewards"].extend(rewards)
-        stats["non_stop_rate"].extend([fr != "stop" for fr in finish_reasons])
-        stats["response_lengths"].extend([len(ids) for ids in response_token_ids])
-        for rm in reward_metrics:
-            for k, v in rm.items():
-                stats.setdefault(f"reward_metrics/{k}", []).append(v)
-
-    raw_episodes: List[Dict[str, Any]] = []
-    for i in range(len(all_samples)):
-        eps = {
-            "query_token_ids": all_query_token_ids[i],
-            "response_token_ids": all_responses_token_ids[i],
-            "sample": all_samples[i],
-            "reward": all_rewards[i],
-            "states": [len(all_responses_token_ids[i])],
-            "value_estimates": [all_rewards[i]],
-            "new_states": split_response(all_responses_token_ids[i]),
-        }
-        raw_episodes.append(eps)
-
-    raw_episodes = estimate_values_by_mc_rollouts(raw_episodes)
-
-    all_advantages = []
-    for eps in raw_episodes:
-        all_advantages.append(get_tokens_advantages(eps["states"], eps["value_estimates"]))
-
-    episodes = {
-        "all_query_token_ids": all_query_token_ids,
-        "all_response_token_ids": all_responses_token_ids,
-        "all_advantages": all_advantages,
-    }
-
-    return episodes, stats
 
 
 def compute_pg_loss(
@@ -639,6 +352,20 @@ def compute_pg_loss(
 
 def main(rank: int):
     # Parse command line arguments
+    arg_parser = argparse.ArgumentParser(description="Train small model on countdown with GRPO")
+    arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
+    arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
+    arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B", help="Model name/path")
+    arg_parser.add_argument("--per_device_batch_size", type=int, default=8, help="Per device batch size")
+    arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
+    arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
+    arg_parser.add_argument("--debug", action="store_true", help="Debug mode")
+    arg_parser.add_argument("--num_responses_per_prompt", type=int, default=8, help="Number of MC samples to take for each response")
+    arg_parser.add_argument("--run_id", type=str, default=None, help="Run ID")
+    arg_parser.add_argument("--output_dir", type=str, default="output", help="Directory to output checkpoints etc")
+    arg_parser.add_argument("--nproc", type=int, default=1, help="Number of processes (data parallelism) to use")
+
+
     args = arg_parser.parse_args()
 
     # rank = int(os.environ.get("RANK", "0"))
@@ -693,7 +420,7 @@ def main(rank: int):
     # Top-k sampling parameter (-1 = disabled)
     TOP_K = -1  # no top k
     # Number of MC samples to take for each response
-    VINEPPO_K = args.vineppo_k
+    RESPONSES_PER_PROMPT = args.num_responses_per_prompt
     # DeepSpeed configuration
     deepspeed_config = {
         "bf16": {"enabled": True},
@@ -729,7 +456,8 @@ def main(rank: int):
         RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}_al{args.algorithm}"
     else:
         RUN_NAME = args.run_id
-    EXP_DIR = Path.home() / "scratch" / "nano_aha_moment" / RUN_NAME
+
+    EXP_DIR = args.output_dir / RUN_NAME
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Logs and Checkpoints will be saved to: {EXP_DIR}")
@@ -843,10 +571,7 @@ def main(rank: int):
         device=f"cuda:{torch.cuda.current_device()}",
         tensor_parallel_size=1,
     )
-    if args.algorithm == "vineppo":
-        logits_processors = [fix_oov_logits_processor(inference_engine)]
-    else:
-        logits_processors = None
+    logits_processors = None
 
     see_memory_usage("After initializing inference engine", force=dist.get_rank() == 0)
 
@@ -857,15 +582,7 @@ def main(rank: int):
             name=RUN_NAME,
             resume="allow",
             config={
-                "model_name": MODEL_NAME,
-                "learning_rate": LEARNING_RATE,
-                "num_iterations": NUM_ITERATIONS,
-                "episodes_per_iteration": EPISODES_PER_ITERATION,
-                "rollouts_per_episode": GENERATIONS_PER_SAMPLE,
-                "kl_coefficient": KL_COEFFICIENT,
-                "temperature": TEMPERATURE,
-                "algorithm": args.algorithm,
-                "vineppo_k": VINEPPO_K,
+                
             },
         )
 
@@ -955,33 +672,14 @@ def main(rank: int):
         logger.info(f"Time taken to generate {len(all_generations)} responses: {time.time() - gen_time} seconds")
 
         # Process responses and calculate rewards
-        if args.algorithm == "grpo":
-            episodes, episodes_stats = create_training_episodes(
-                samples=samples,
-                all_generations=all_generations,
-                all_finish_reasons=all_finish_reasons,
-                tokenizer=tokenizer,
-                EOS_TOKEN=EOS_TOKEN,
-                GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
-            )
-        elif args.algorithm == "vineppo":
-            episodes, episodes_stats = create_vineppo_training_episodes(
-                inference_engine=inference_engine,
-                samples=samples,
-                all_generations=all_generations,
-                all_finish_reasons=all_finish_reasons,
-                tokenizer=tokenizer,
-                EOS_TOKEN_ID=EOS_TOKEN_ID,
-                EOS_TOKEN=EOS_TOKEN,
-                GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
-                MAX_RESPONSE_TOKENS=MAX_RESPONSE_TOKENS,
-                VINEPPO_K=VINEPPO_K,
-                TEMPERATURE=TEMPERATURE,
-                TOP_P=TOP_P,
-                TOP_K=TOP_K,
-            )
-        else:
-            raise ValueError(f"Invalid algorithm: {args.algorithm}")
+        episodes, episodes_stats = create_training_episodes(
+            samples=samples,
+            all_generations=all_generations,
+            all_finish_reasons=all_finish_reasons,
+            tokenizer=tokenizer,
+            EOS_TOKEN=EOS_TOKEN,
+            GENERATIONS_PER_SAMPLE=GENERATIONS_PER_SAMPLE,
+        )
 
         inference_engine.sleep(1)
         gc.collect()
