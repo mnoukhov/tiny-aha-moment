@@ -213,7 +213,6 @@ def evaluate_on_test_set(
     inference_engine: LLM,
     test_dataset: Dataset,
     tokenizer: AutoTokenizer,
-    eos_token: str,
     eval_sampling_params: SamplingParams,
     reward_func: Callable[[str, Dict[str, Any]], Tuple[float, Dict[str, float]]],
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -224,7 +223,6 @@ def evaluate_on_test_set(
         inference_engine: The sglang Engine instance used for text generation
         test_dataset: Dataset containing test samples
         tokenizer: Tokenizer for decoding generated token IDs
-        eos_token: End of sequence token string
         eval_sampling_params: Dictionary of parameters for controlling the generation process
         reward_func: Function that computes rewards for generated responses. Takes a response
             string and sample dict as input, returns a tuple of (overall_reward, reward_components)
@@ -245,7 +243,6 @@ def evaluate_on_test_set(
         ...     inference_engine=engine,
         ...     test_dataset=dataset,
         ...     tokenizer=tokenizer,
-        ...     eos_token="</s>",
         ...     eval_sampling_params={"temperature": 0.7, "max_tokens": 100},
         ...     reward_func=compute_rewards
         ... )
@@ -417,9 +414,7 @@ def initialize_training_process_group(rank: int, world_size: int):
     torch.cuda.set_device(rank)
 
     if rank == 0:
-        print(
-            f"{'#' * 80}\n" f"# Initializing the training NCCL PG with\n" f"# world_size={world_size} \n" f"{'#' * 80}"
-        )
+        print(f"{'#' * 80}\n# Initializing the training NCCL PG with\n# world_size={world_size} \n{'#' * 80}")
 
     dist.init_process_group(
         backend="nccl",

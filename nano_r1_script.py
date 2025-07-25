@@ -84,19 +84,15 @@ def format_reward_func(completion: str, EOS_TOKEN: str) -> float:
     allowed_pattern = r"^[\d+\-*/().\s]+$"
 
     try:
-        # Synthetically prepend <think> (if your pipeline relies on that to ease matching)
+        # Since <think> was part of our prompt, we add it to the completion so we get <think>...</think>
         completion = "<think>" + completion
-
-        # Strip EOS token if present
-        if completion.endswith(EOS_TOKEN):
-            completion = completion[: -len(EOS_TOKEN)]
 
         # Check if the format is correct
         # Pattern means:
         # 1) <think>...contents not including other <think> tags...</think>
         # 2) \n
         # 3) <answer>...anything...</answer>
-        regex = r"^<think>([^<]*(?:<(?!/?think>)[^<]*)*)<\/think>\n<answer>([\s\S]*?)<\/answer>$"
+        regex = r"^<think>([^<]*(?:<(?!/?think>)[^<]*)*)<\/think>\n<answer>([\s\S]*?)<\/answer>"
         match = re.search(regex, completion, re.DOTALL)
 
         if match is None or len(match.groups()) != 2:
@@ -458,6 +454,7 @@ def main(args, rank: int):
     )
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    # TODO FIX
     EOS_TOKEN_ID = tokenizer.eos_token_id
     EOS_TOKEN = tokenizer.convert_ids_to_tokens(EOS_TOKEN_ID)
 
@@ -590,6 +587,13 @@ def main(args, rank: int):
         #########################################################
         # Evaluation
         #########################################################
+        eval_sampling_params = SamplingParams(
+            temperature=0.3,
+            max_tokens=MAX_RESPONSE_TOKENS,
+            n=1,
+            detokenize=False,
+            stop=["</answer>", EOS_TOKEN],
+        )
 
         eval_stats = None
         if iteration % 25 == 0 and iteration > 0 and dist.get_rank() == 0:  # Only rank 0 will evaluate:
@@ -598,14 +602,7 @@ def main(args, rank: int):
                 inference_engine=inference_engine,
                 test_dataset=test_dataset,
                 tokenizer=tokenizer,
-                eos_token=EOS_TOKEN,
-                eval_sampling_params=SamplingParams(
-                    temperature=0.3,
-                    max_tokens=MAX_RESPONSE_TOKENS,
-                    n=1,
-                    detokenize=False,
-                    stop_token_ids=[EOS_TOKEN_ID],
-                ),
+                eval_sampling_params=eval_sampling_params,
                 reward_func=lambda completion, sample: compute_reward(completion, sample, EOS_TOKEN),
             )
             eval_episode_table = dump_episodes(
@@ -623,6 +620,17 @@ def main(args, rank: int):
         # Generate Episodes
         #########################################################
 
+        train_sampling_params = SamplingParams(
+            n=GENERATIONS_PER_SAMPLE,
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            top_k=TOP_K,
+            max_tokens=MAX_RESPONSE_TOKENS,
+            detokenize=False,
+            stop=["</answer>", EOS_TOKEN],
+            logits_processors=logits_processors,
+        )
+
         # Sample training batch
         indices = sampler_rng.choice(len(train_dataset), size=NUM_SAMPLES_PER_ITERATION, replace=False)
         samples = train_dataset.select(indices)
@@ -632,16 +640,7 @@ def main(args, rank: int):
         # Sample responses
         outputs = inference_engine.generate(
             prompt_token_ids=samples["input_ids"],
-            sampling_params=SamplingParams(
-                n=GENERATIONS_PER_SAMPLE,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-                top_k=TOP_K,
-                max_tokens=MAX_RESPONSE_TOKENS,
-                detokenize=False,
-                stop_token_ids=[EOS_TOKEN_ID],
-                logits_processors=logits_processors,
-            ),
+            sampling_params=train_sampling_params,
         )
         all_generations = [list(g.token_ids) for out in outputs for g in out.outputs]
         all_finish_reasons = [g.finish_reason for out in outputs for g in out.outputs]
@@ -830,7 +829,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--kl_coeff", type=float, default=0.001, help="KL coefficient for GRPO")
     arg_parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for sampling")
     arg_parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B", help="Model name/path")
-    arg_parser.add_argument("--per_device_batch_size", type=int, default=8, help="Per device batch size")
+    arg_parser.add_argument("--per_device_batch_size", type=int, default=1, help="Per device batch size")
     arg_parser.add_argument("--max_response_tokens", type=int, default=1024, help="Max response tokens")
     arg_parser.add_argument("--learning_rate", type=float, default=1e-6, help="Learning rate for training")
     arg_parser.add_argument("--debug", action="store_true", help="Debug mode")
