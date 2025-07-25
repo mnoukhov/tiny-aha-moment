@@ -52,17 +52,8 @@ def preprocess_example(
 ):
     numbers: List[int] = example["nums"]
     target: int = example["target"]
-
-    prefix = [
-        {"role": "system", "content": SYSTEM_MESSAGE},
-        {
-            "role": "user",
-            "content": PROMPT_TEMPLATE.format(numbers=numbers, target=target),
-        },
-        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
-    ]
-    input_ids = tokenizer.apply_chat_template(prefix, tokenize=True, continue_final_message=True)
-    prompt = tokenizer.decode(input_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+    prompt = PROMPT_TEMPLATE.format(numbers=numbers, target=target)
+    input_ids = tokenizer(prompt, tokenize=True)["input_ids"]
     return {"prompt": prompt, "input_ids": input_ids}
 
 
@@ -428,15 +419,13 @@ def main(args):
     # Prompts and Dataset
     ############################################
 
-    SYSTEM_MESSAGE = (
-        "You are a helpful assistant. You first think about the reasoning process in the mind "
-        "and then provide the user with the answer."
-    )
     PROMPT_TEMPLATE = (
-        "Using the numbers {numbers}, create an equation that equals {target}. "
+        "Using some numbers, create an equation that equals a target number. "
         "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
-        "Show your work in <think> </think> tags. And return the final equation and answer in "
-        "<answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
+        "Think about the reasoning process then return the final equation and answer in <answer> </answer> tags, "
+        "for example after thinking step by step (5 + 2) - 3 = 4 therefore <answer>(5 + 2) - 3</answer>.\n\n"
+        "Use the number {numbers} to create an equation that equals {target}. "
+        "Let's solve this step by step."
     )
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -454,7 +443,6 @@ def main(args):
         num_proc=6,
         fn_kwargs={
             "tokenizer": tokenizer,
-            "SYSTEM_MESSAGE": SYSTEM_MESSAGE,
             "PROMPT_TEMPLATE": PROMPT_TEMPLATE,
         },
         desc="Preprocessing dataset",
