@@ -26,6 +26,7 @@ from utils import (
     dump_episodes,
     evaluate_on_test_set,
     find_last_checkpoint,
+    initialize_training_process_group,
     load_model_into_vllm,
     prepare_model_inputs,
 )
@@ -346,6 +347,8 @@ def compute_pg_loss(
 
 
 def main(args):
+    # ignore
+    initialize_training_process_group(0, 1)
     curr_cuda_device = torch.device("cuda")
 
     ############################################
