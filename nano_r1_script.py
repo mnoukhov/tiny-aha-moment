@@ -10,11 +10,9 @@ from typing import Any, Dict, List, Tuple, Union
 import deepspeed
 import numpy as np
 import torch
-import torch.distributed as dist
 import wandb
 from datasets import load_dataset
 from deepspeed import DeepSpeedEngine
-from deepspeed.runtime.utils import see_memory_usage
 from tqdm import trange
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from vllm import LLM, SamplingParams
@@ -26,7 +24,6 @@ from utils import (
     dump_episodes,
     evaluate_on_test_set,
     find_last_checkpoint,
-    initialize_training_process_group,
     load_model_into_vllm,
     prepare_model_inputs,
 )
@@ -335,7 +332,6 @@ def compute_pg_loss(
 
 def main(args):
     # ignore
-    initialize_training_process_group(0, 1)
     curr_cuda_device = torch.device("cuda")
 
     ############################################
@@ -398,8 +394,6 @@ def main(args):
         "gradient_accumulation_steps": EPISODES_PER_ITERATION // PER_DEVICE_BATCH_SIZE,
     }
 
-    dist.barrier(device_ids=[torch.cuda.current_device()])
-
     model_name_short = MODEL_NAME.split("/")[-1]
     if args.run_id is None:
         RUN_NAME = f"{model_name_short}_temp{TEMPERATURE}_kl{KL_COEFFICIENT}_lr{LEARNING_RATE}"
@@ -437,9 +431,6 @@ def main(args):
 
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     # Rank 0 will preprocess the dataset first
-    if dist.get_rank() != 0:
-        # Other ranks will wait for rank 0 to enter the barrier
-        dist.barrier(device_ids=[torch.cuda.current_device()])
     dataset = dataset.map(
         preprocess_example,
         num_proc=6,
@@ -449,19 +440,12 @@ def main(args):
         },
         desc="Preprocessing dataset",
     )
-    if dist.get_rank() == 0:
-        # Rank 0 will enter the barrier so that other ranks can start preprocessing
-        dist.barrier(device_ids=[torch.cuda.current_device()])
-    dist.barrier(device_ids=[torch.cuda.current_device()])
 
     # Split dataset
     train_test_split = dataset.train_test_split(test_size=500, seed=args.seed)
     train_dataset = train_test_split["train"]
     orig_train_dataset_size = len(train_dataset)
     test_dataset = train_test_split["test"]
-
-    # Shard the training dataset
-    train_dataset = train_dataset.shard(num_shards=dist.get_world_size(), index=dist.get_rank())
 
     logger.info(f"Train dataset size: {orig_train_dataset_size}; each rank will process {len(train_dataset)} samples")
     logger.info(f"Test dataset size: {len(test_dataset)}")
@@ -484,8 +468,6 @@ def main(args):
     )
     policy_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
-    see_memory_usage("Before initializing DeepSpeed engines", force=dist.get_rank() == 0)
-
     # Initialize DeepSpeed engines
     policy_model, *_ = deepspeed.initialize(
         model=policy_model,
@@ -498,18 +480,14 @@ def main(args):
     )
 
     # reference_model.module.cpu()
-    dist.barrier(device_ids=[torch.cuda.current_device()])
 
     ############################################
     # Initialize vLLM (Inference) engine
     ############################################
 
-    see_memory_usage("Before initializing inference engine", force=dist.get_rank() == 0)
-
-    if dist.get_rank() != 0:
-        # Disable root vllm logger for non-main ranks
-        vllm_logger = logging.getLogger("vllm")
-        vllm_logger.setLevel(logging.ERROR)
+    # Disable root vllm logger for non-main ranks
+    vllm_logger = logging.getLogger("vllm")
+    vllm_logger.setLevel(logging.ERROR)
 
     inference_engine = LLM(
         model=MODEL_NAME,
@@ -525,16 +503,13 @@ def main(args):
         tensor_parallel_size=1,
     )
 
-    see_memory_usage("After initializing inference engine", force=dist.get_rank() == 0)
-
     # Wandb for logging. Only rank 0 will initialize wandb
-    if dist.get_rank() == 0:
-        wandb.init(
-            project="nano-aha-moment",
-            name=RUN_NAME,
-            resume="allow",
-            config=vars(args),
-        )
+    wandb.init(
+        project="nano-aha-moment",
+        name=RUN_NAME,
+        resume="allow",
+        config=vars(args),
+    )
 
     sampler_rng = np.random.default_rng(seed=args.seed)
     NUM_SAMPLES_PER_ITERATION = EPISODES_PER_ITERATION // GENERATIONS_PER_SAMPLE
@@ -551,7 +526,7 @@ def main(args):
         load_model_into_vllm(policy_model, inference_engine)
 
         logger.info(f"Skipping {ckpt_iter} rounds of samples")
-        for _ in trange(ckpt_iter, disable=dist.get_rank() != 0):
+        for _ in trange(ckpt_iter):
             _ = sampler_rng.choice(len(train_dataset), size=NUM_SAMPLES_PER_ITERATION, replace=False)
 
     for iteration in trange(begin_iter, NUM_ITERATIONS):
@@ -572,7 +547,7 @@ def main(args):
         )
 
         eval_stats = None
-        if iteration % args.eval_every == 0 and iteration > 0 and dist.get_rank() == 0:  # Only rank 0 will evaluate:
+        if iteration % args.eval_every == 0 and iteration > 0:
             logger.info("Evaluating on eval set...")
             eval_episodes, eval_stats = evaluate_on_test_set(
                 inference_engine=inference_engine,
@@ -590,7 +565,6 @@ def main(args):
                 is_eval=True,
             )
             wandb.log({"eval/episodes": eval_episode_table, "iteration": iteration})
-        dist.barrier(device_ids=[torch.cuda.current_device()])
 
         #########################################################
         # Generate Episodes
@@ -663,6 +637,7 @@ def main(args):
             device=curr_cuda_device,
         )
 
+        # This is old code that frees up more space if you're running 3B models
         # logger.info("Moving reference model to GPU")
         # reference_model.module.to(curr_cuda_device)
         # reference_model.eval()
@@ -674,7 +649,6 @@ def main(args):
                 EPISODES_PER_ITERATION,
                 PER_DEVICE_BATCH_SIZE,
                 desc="Computing reference logprobs",
-                disable=dist.get_rank() != 0,
             ):
                 batch = {k: v[i : i + PER_DEVICE_BATCH_SIZE] for k, v in model_inputs.items()}
                 ref_log_probs.append(
@@ -706,7 +680,6 @@ def main(args):
             EPISODES_PER_ITERATION,
             PER_DEVICE_BATCH_SIZE,
             desc="Gradient Accumulation",
-            disable=dist.get_rank() != 0,
         ):
             batch = {k: v[i : i + PER_DEVICE_BATCH_SIZE] for k, v in model_inputs.items()}
 
@@ -752,53 +725,46 @@ def main(args):
         # Log metrics
         #########################################################
 
-        if dist.get_rank() == 0:
-            train_metrics = {k: np.mean(v) for k, v in metrics.items() if None not in v}
-            train_metrics["learning_rate"] = policy_model.get_lr()[0]
-            logs = {
-                "iteration": iteration,
-                f"episodes/iter_{iteration:06d}": episode_table,
-                **{f"train/{k}": v for k, v in train_metrics.items()},
-            }
-            if eval_stats is not None:
-                logs.update({f"eval/{k}": np.mean(v) for k, v in eval_stats.items()})
-            wandb.log(logs)
+        train_metrics = {k: np.mean(v) for k, v in metrics.items() if None not in v}
+        train_metrics["learning_rate"] = policy_model.get_lr()[0]
+        logs = {
+            "iteration": iteration,
+            f"episodes/iter_{iteration:06d}": episode_table,
+            **{f"train/{k}": v for k, v in train_metrics.items()},
+        }
+        if eval_stats is not None:
+            logs.update({f"eval/{k}": np.mean(v) for k, v in eval_stats.items()})
+        wandb.log(logs)
 
-            selected_keys = [
-                "train/kl_penalty",
-                "train/rewards",
-                "train/reward_metrics/format_correct",
-                "train/reward_metrics/equation_reward",
-                "train/pass_at_group",
-                "train/response_lengths",
-                "eval/rewards",
-                "eval/reward_metrics/format_correct",
-                "eval/reward_metrics/equation_reward",
-            ]
-            selected_metrics = {k: float(logs[k]) for k in selected_keys if k in logs}
-            logger.info(f"KEY METRICS: {selected_metrics}")
+        selected_keys = [
+            "train/kl_penalty",
+            "train/rewards",
+            "train/reward_metrics/format_correct",
+            "train/reward_metrics/equation_reward",
+            "train/pass_at_group",
+            "train/response_lengths",
+            "eval/rewards",
+            "eval/reward_metrics/format_correct",
+            "eval/reward_metrics/equation_reward",
+        ]
+        selected_metrics = {k: float(logs[k]) for k in selected_keys if k in logs}
+        logger.info(f"KEY METRICS: {selected_metrics}")
 
-        if iteration % 50 == 0 and iteration != 0:
-            ckpt_dir = EXP_DIR / "checkpoints" / f"ckpt_{iteration:06d}"
+    if args.do_save:
+        ckpt_dir = EXP_DIR / "checkpoints" / f"ckpt_{iteration:06d}"
 
-            logger.info("Saving HF model")
-            if dist.get_rank() == 0:
-                policy_model.module.save_pretrained(str(ckpt_dir / "hf_model"))
-                tokenizer.save_pretrained(str(ckpt_dir / "hf_model"))
-            dist.barrier(device_ids=[torch.cuda.current_device()])
+        logger.info("Saving HF model")
+        policy_model.module.save_pretrained(str(ckpt_dir / "hf_model"))
+        tokenizer.save_pretrained(str(ckpt_dir / "hf_model"))
 
-            logger.info("Saving DeepSpeed checkpoint")
-            policy_model.save_checkpoint(str(ckpt_dir / "deepspeed"))
+        logger.info("Saving DeepSpeed checkpoint")
+        policy_model.save_checkpoint(str(ckpt_dir / "deepspeed"))
 
-            if dist.get_rank() == 0:
-                clean_up_checkpoints(
-                    exp_dir=EXP_DIR,
-                    keep_every_n_steps=50,
-                    exclude=[ckpt_dir],
-                )
-            dist.barrier(device_ids=[torch.cuda.current_device()])
-
-    dist.destroy_process_group()
+        clean_up_checkpoints(
+            exp_dir=EXP_DIR,
+            keep_every_n_steps=50,
+            exclude=[ckpt_dir],
+        )
 
 
 if __name__ == "__main__":
