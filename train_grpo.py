@@ -429,9 +429,10 @@ def main(args):
     PROMPT_TEMPLATE = (
         "Combine a couple numbers in a simple algebraic equation so that it equals a target number. "
         "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
-        "Think about the reasoning process then return the answer, a final equation inside <answer> </answer> tags. "
+        "Think about the reasoning process then return the final equation inside <answer> </answer> tags. "
+        "Do not include the = target inside the <answer> </answer> tags. "
         "For example with numbers 5 2 3 to equal target 4, after thinking step by step we see (5 + 2) - 3 = 4 so output <answer>(5 + 2) - 3</answer>.\n\n"
-        "Use the number {numbers} to create an equation that equals {target}.\n\n"
+        "Use the numbers {numbers} to create an equation that equals {target}.\n\n"
         "Let's solve this step by step."
     )
 
